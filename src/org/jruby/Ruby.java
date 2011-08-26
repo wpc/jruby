@@ -2825,6 +2825,7 @@ public final class Ruby {
         getBeanManager().unregisterParserStats();
         getBeanManager().unregisterClassCache();
         getBeanManager().unregisterMethodCache();
+        getBeanManager().unregisterRuntime();
 
         getSelectorPool().cleanup();
 
