@@ -35,8 +35,6 @@ package org.jruby.test;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
-import java.lang.reflect.Field;
-import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
 
@@ -47,7 +45,7 @@ import org.jruby.RubyIO;
 import org.jruby.RubyInstanceConfig;
 import org.jruby.RubyString;
 import org.jruby.exceptions.RaiseException;
-import org.jruby.ext.posix.util.Platform;
+import jnr.posix.util.Platform;
 import org.jruby.runtime.Block;
 import org.jruby.runtime.backtrace.TraceType;
 import org.jruby.runtime.builtin.IRubyObject;
@@ -104,38 +102,43 @@ public class TestRuby extends TestRubyBase {
     }
     
     public void testNativeENVSettingWhenNativeIsDisabledGlobally() throws Exception {
-        try {
-            setNativeEnabled(false);
-            runtime = Ruby.newInstance();
-            runtime.evalScriptlet("ENV['gravy'] = 'with sausage'");
-            assertNull(runtime.getPosix().getenv("gravy"));
-        } finally {
-            setNativeEnabled(true);
-        }
+        RubyInstanceConfig cfg = new RubyInstanceConfig();
+        cfg.setNativeEnabled(false);
+        runtime = Ruby.newInstance(cfg);
+        runtime.evalScriptlet("ENV['gravy'] = 'with sausage'");
+        assertNull(runtime.getPosix().getenv("gravy"));
     }
     
     public void testNativeENVSettingWhenNativeIsDisabledGloballyButExplicitlyEnabledOnTheRuntime() throws Exception {
-        try {
-            setNativeEnabled(false);
-            RubyInstanceConfig cfg = new RubyInstanceConfig();
-            cfg.setUpdateNativeENVEnabled(true);
-            runtime = Ruby.newInstance(cfg);
-            runtime.evalScriptlet("ENV['sausage'] = 'biscuits'");
-            assertNull(runtime.getPosix().getenv("sausage"));
-        } finally {
-            setNativeEnabled(true);
-        }
+        RubyInstanceConfig cfg = new RubyInstanceConfig();
+        cfg.setNativeEnabled(false);
+        cfg.setUpdateNativeENVEnabled(true);
+        runtime = Ruby.newInstance(cfg);
+        runtime.evalScriptlet("ENV['sausage'] = 'biscuits'");
+        assertNull(runtime.getPosix().getenv("sausage"));
     }
     
-    private void setNativeEnabled(boolean nativeEnabled) throws Exception {
-        Field nativeEnabledField = RubyInstanceConfig.class.getDeclaredField("nativeEnabled");
-        nativeEnabledField.setAccessible(true);
-
-        Field modifiers = Field.class.getDeclaredField("modifiers");
-        modifiers.setAccessible(true);
-        modifiers.setInt(nativeEnabledField, nativeEnabledField.getModifiers() & ~Modifier.FINAL);
+    public void testRequireCextNotAllowedWhenCextIsDisabledGlobally() throws Exception {
+        RubyInstanceConfig cfg = new RubyInstanceConfig();
+        cfg.setCextEnabled(false);
+        runtime = Ruby.newInstance(cfg);
         
-        nativeEnabledField.set(RubyInstanceConfig.class, nativeEnabled);
+        String extensionSuffix;
+        if (Platform.IS_WINDOWS) {
+            extensionSuffix = ".dll";
+        } else if (Platform.IS_MAC) { // TODO: BSD also?
+            extensionSuffix = ".bundle";
+        } else {
+            extensionSuffix = ".so";
+        }
+
+        try {
+            runtime.evalScriptlet("require 'tempfile'; file = Tempfile.open(['foo', '" + extensionSuffix + "']); file.close; require file.path");
+            fail();
+        } catch (RaiseException re) {
+            assertTrue(re.getException().message.asJavaString().startsWith(
+                    "C extensions are disabled"));
+        }
     }
     
     public void testPrintErrorWithNilBacktrace() throws Exception {

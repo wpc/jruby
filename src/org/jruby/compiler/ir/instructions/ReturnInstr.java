@@ -21,7 +21,7 @@ public class ReturnInstr extends OneOperandInstr {
 
     @Override
     public String toString() { 
-        return operation + "(" + argument + (methodToReturnFrom == null ? "" : ", <" + methodToReturnFrom.getName() + ">") + ")";
+        return getOperation() + "(" + argument + (methodToReturnFrom == null ? "" : ", <" + methodToReturnFrom.getName() + ">") + ")";
     }
 
     public ReturnInstr(Operand returnValue, IRMethod m) {
@@ -33,13 +33,13 @@ public class ReturnInstr extends OneOperandInstr {
 
     @Override
     public Instr cloneForInlining(InlinerInfo ii) {
-		  // SSS FIXME: This should also look at the 'methodToReturnFrom' arg
+        // SSS FIXME: This should also look at the 'methodToReturnFrom' arg
         return new CopyInstr(ii.getCallResultVariable(), getArg().cloneForInlining(ii));
     }
 
     @Override
     public Label interpret(InterpreterContext interp, ThreadContext context, IRubyObject self) {
         interp.setReturnValue(getArg().retrieve(interp, context, self));
-        return interp.getMethodExitLabel();
+        return interp.getCurrentIRScope().getCFG().getExitBB().getLabel();
     }
 }

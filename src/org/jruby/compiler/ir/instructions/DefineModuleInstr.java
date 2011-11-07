@@ -1,43 +1,46 @@
 package org.jruby.compiler.ir.instructions;
 
-import org.jruby.Ruby;
 import org.jruby.RubyModule;
-import org.jruby.compiler.ir.IRScope;
+import org.jruby.compiler.ir.IRModule;
 import org.jruby.compiler.ir.operands.Label;
-import org.jruby.compiler.ir.operands.ModuleMetaObject;
+import org.jruby.compiler.ir.operands.Operand;
 import org.jruby.compiler.ir.operands.Variable;
 import org.jruby.compiler.ir.Operation;
 import org.jruby.compiler.ir.representations.InlinerInfo;
 import org.jruby.interpreter.InterpreterContext;
 import org.jruby.runtime.ThreadContext;
+import org.jruby.runtime.Visibility;
 import org.jruby.runtime.builtin.IRubyObject;
+import org.jruby.internal.runtime.methods.DynamicMethod;
+import org.jruby.internal.runtime.methods.InterpretedIRMethod;
 
 public class DefineModuleInstr extends OneOperandInstr {
-    public DefineModuleInstr(Variable dest, ModuleMetaObject m) {
-        super(Operation.DEF_MODULE, dest, m);
+    private final IRModule newIRModule;
+
+    public DefineModuleInstr(IRModule newIRModule, Variable dest, Operand container) {
+        super(Operation.DEF_MODULE, dest, container);
+        
+        this.newIRModule = newIRModule;
     }
 
     @Override
     public Instr cloneForInlining(InlinerInfo ii) {
-        return new DefineModuleInstr(ii.getRenamedVariable(result), (ModuleMetaObject)getArg());
+        return new DefineModuleInstr(this.newIRModule, ii.getRenamedVariable(getResult()), getArg().cloneForInlining(ii));
     }
 
     @Override
     public Label interpret(InterpreterContext interp, ThreadContext context, IRubyObject self) {
-        Ruby runtime = context.getRuntime();
-        ModuleMetaObject mmo = (ModuleMetaObject)getArg();
-        IRScope scope = mmo.scope;
-        RubyModule container = mmo.getContainer(interp, context, self);
-        RubyModule module = container.defineOrGetModuleUnder(scope.getName());
+        Object container = getArg().retrieve(interp, context, self);
+        
+        if (!(container instanceof RubyModule)) throw context.getRuntime().newTypeError("no outer class/module");
 
-		  // SSS FIXME: Hack/side-effect to get the meta-class instantiated for certain scenarios!
-		  // We need to find out why 'foo.extend(module)' is not creating the meta class automatically.
-		  // The correct fix is to find out who is implicitly calling getSingletonClass in the current
-		  // AST interpreter, remove side effect of getSingletonClass and make the build of this metaclass
-		  // explicit (probably in the extend methods?).
-        module.getSingletonClass();
+        RubyModule newRubyModule = ((RubyModule) container).defineOrGetModuleUnder(newIRModule.getName());
+        newIRModule.getStaticScope().setModule(newRubyModule);
+        DynamicMethod method = new InterpretedIRMethod(newIRModule.getRootMethod(), Visibility.PUBLIC, newRubyModule);
 
-        getResult().store(interp, context, self, mmo.interpretBody(interp, context, module));
+        // SSS FIXME: Rather than pass the block implicitly, should we add %block as another operand to DefineClass, DefineModule instrs?
+        Object value = method.call(context, newRubyModule, newRubyModule, "", new IRubyObject[]{}, interp.getBlock());
+        getResult().store(interp, context, self, value);
         return null;
     }
 }

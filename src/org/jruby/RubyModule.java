@@ -57,7 +57,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import org.jruby.anno.FrameField;
-
+import org.jruby.anno.AnnotationBinder;
 import org.jruby.anno.JRubyClass;
 import org.jruby.anno.JRubyConstant;
 import org.jruby.anno.JRubyMethod;
@@ -100,7 +100,6 @@ import org.jruby.runtime.marshal.MarshalStream;
 import org.jruby.runtime.marshal.UnmarshalStream;
 import org.jruby.runtime.opto.Invalidator;
 import org.jruby.runtime.opto.OptoFactory;
-import org.jruby.runtime.opto.SwitchPointInvalidator;
 import org.jruby.util.ClassProvider;
 import org.jruby.util.IdUtil;
 import org.jruby.util.collections.WeakHashSet;
@@ -388,13 +387,7 @@ public class RubyModule extends RubyObject {
      * @param name the new base name of the class
      */
     public void setBaseName(String name) {
-        String oldName = baseName;
         baseName = name;
-        
-        // clear full name for recalculation later if base was null before
-        if (oldName == null) {
-            calculatedName = null;
-        }
     }
 
     /**
@@ -405,36 +398,39 @@ public class RubyModule extends RubyObject {
      * @return The generated class name
      */
     public String getName() {
-        if (calculatedName == null) {
-            return calculateName();
-        }
-        
-        return calculatedName;
+        return calculateName();
     }
 
     /**
      * Recalculate the fully-qualified name of this class/module.
      */
-    private synchronized String calculateName() {
+    private String calculateName() {
         if (getBaseName() == null) {
             // we are anonymous, don't store calculated name
             return calculateAnonymousName();
         }
         
         Ruby runtime = getRuntime();
-        String name = getBaseName();
         
-        for (RubyModule p = getParent() ; p != null && p != runtime.getObject() ; p = p.getParent()) {
-            if (p.getBaseName() == null) {
-                // parent is anonymous, don't store calculated name
-                return calculateAnonymousName();
-            }
+        String name = getBaseName();
+        RubyClass objectClass = runtime.getObject();
+        
+        for (RubyModule p = getParent() ; p != null && p != objectClass ; p = p.getParent()) {
+            String pName = p.getBaseName();
             
-            // parent is not anonymous, use :: qualified name
-            name = p.getBaseName() + "::" + name;
+            // This is needed when the enclosing class or module is a singleton.
+            // In that case, we generated a name such as null::Foo, which broke 
+            // Marshalling, among others. The correct thing to do in this situation 
+            // is to insert the generate the name of form #<Class:01xasdfasd> if 
+            // it's a singleton module/class, which this code accomplishes.
+            if(pName == null) {
+                pName = p.getName();
+             }
+            
+            name = pName + "::" + name;
         }
         
-        return calculatedName = name;
+        return name;
     }
 
     private String calculateAnonymousName() {
@@ -676,9 +672,9 @@ public class RubyModule extends RubyObject {
             try {
                 String qualifiedName = "org.jruby.gen." + clazz.getCanonicalName().replace('.', '$');
 
-                if (DEBUG) LOG.debug("looking for {}$Populator", qualifiedName);
+                if (DEBUG) LOG.debug("looking for " + qualifiedName + AnnotationBinder.POPULATOR_SUFFIX);
 
-                Class populatorClass = Class.forName(qualifiedName + "$Populator");
+                Class populatorClass = Class.forName(qualifiedName + AnnotationBinder.POPULATOR_SUFFIX);
                 populator = (TypePopulator)populatorClass.newInstance();
             } catch (Throwable t) {
                 if (DEBUG) LOG.debug("Could not find it, using default populator");
@@ -1054,13 +1050,16 @@ public class RubyModule extends RubyObject {
 
     public void invalidateCacheDescendants() {
         if (DEBUG) LOG.debug("invalidating descendants: {}", baseName);
-        invalidateCacheDescendantsInner();
-        // update all hierarchies into which this module has been included
+        List<Invalidator> invalidators = new ArrayList();
+        invalidators.add(methodInvalidator);
+        
         synchronized (getRuntime().getHierarchyLock()) {
             for (RubyClass includingHierarchy : includingHierarchies) {
-                includingHierarchy.invalidateCacheDescendants();
+                includingHierarchy.addInvalidatorsAndFlush(invalidators);
             }
         }
+        
+        methodInvalidator.invalidateAll(invalidators);
     }
     
     protected void invalidateCoreClasses() {
@@ -1081,6 +1080,7 @@ public class RubyModule extends RubyObject {
         generation = getRuntime().getNextModuleGeneration();
     }
 
+    @Deprecated
     protected void invalidateCacheDescendantsInner() {
         methodInvalidator.invalidate();
     }
@@ -2930,7 +2930,7 @@ public class RubyModule extends RubyObject {
         // if adding a module under a constant name, set that module's basename to the constant name
         if (value instanceof RubyModule) {
             RubyModule module = (RubyModule)value;
-            if (module.getBaseName() == null) {
+            if (module != this && module.getBaseName() == null) {
                 module.setBaseName(name);
                 module.setParent(this);
             }
@@ -3436,12 +3436,6 @@ public class RubyModule extends RubyObject {
      * an anonymous class.
      */
     protected String baseName;
-    
-    /**
-     * The fully-qualified name for this class/modulem including nesting. Use
-     * getName() to get it (with lazy calculation) or calclateName() to recalc.
-     */
-    private String calculatedName;
 
     private volatile Map<String, IRubyObject> constants = Collections.EMPTY_MAP;
     
@@ -3508,7 +3502,7 @@ public class RubyModule extends RubyObject {
     }
     private volatile Map<String, Autoload> autoloads = Collections.EMPTY_MAP;
     private volatile Map<String, DynamicMethod> methods = Collections.EMPTY_MAP;
-    private Map<String, CacheEntry> cachedMethods = Collections.EMPTY_MAP;
+    protected Map<String, CacheEntry> cachedMethods = Collections.EMPTY_MAP;
     protected int generation;
 
     protected volatile Set<RubyClass> includingHierarchies = Collections.EMPTY_SET;
@@ -3525,5 +3519,5 @@ public class RubyModule extends RubyObject {
     private volatile Map<String, IRubyObject> classVariables = Collections.EMPTY_MAP;
     
     // Invalidator used for method caches
-    private final Invalidator methodInvalidator;
+    protected final Invalidator methodInvalidator;
 }

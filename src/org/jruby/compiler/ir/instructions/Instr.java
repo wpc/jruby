@@ -27,8 +27,10 @@ import org.jruby.runtime.builtin.IRubyObject;
 // Ex: v = BOXED_FIXNUM(n)
 //     v = HAS_TYPE(Fixnum)
 public abstract class Instr {
-    public final Operation operation;
-    public final Variable result;
+    public static final Operand[] EMPTY_OPERANDS = new Operand[] {};
+    
+    private final Operation operation;
+    private final Variable result;
     // Used during optimization passes to propagate type and other information
     private Attribute[] attributes;
     // Is this instruction live or dead?  During optimization passes, if this instruction
@@ -117,7 +119,8 @@ public abstract class Instr {
      * It is not required that it do so -- code correctness is not compromised by failure
      * to simplify
      */
-    public abstract void simplifyOperands(Map<Operand, Operand> valueMap);
+    public void simplifyOperands(Map<Operand, Operand> valueMap) {
+    }
 
     /**
      * This method takes as input a map of operands to their values, and outputs

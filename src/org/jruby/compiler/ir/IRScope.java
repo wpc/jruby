@@ -2,7 +2,6 @@ package org.jruby.compiler.ir;
 
 import org.jruby.compiler.ir.instructions.Instr;
 import org.jruby.compiler.ir.operands.Label;
-import org.jruby.compiler.ir.operands.Operand;
 import org.jruby.compiler.ir.operands.Variable;
 import org.jruby.compiler.ir.compiler_pass.CompilerPass;
 import org.jruby.compiler.ir.operands.LocalVariable;
@@ -16,11 +15,6 @@ import org.jruby.parser.StaticScope;
  */
 public interface IRScope {
     /**
-     *  Returns the containing parent scope
-     */
-    public Operand getContainer();
-
-    /**
      *  Returns the lexical scope that contains this scope definition
      */
     public IRScope getLexicalParent();
@@ -31,7 +25,12 @@ public interface IRScope {
     public IRModule getNearestModule();
 
     /**
-     * Returns the nearest method from this scope which may be itself.
+     * Returns the top level scope
+     */
+    public IRScope getTopLevelScope();
+
+    /**
+     * Returns the nearest method from this scope which may be itself (can never be null)
      */
     public IRMethod getNearestMethod();
     
@@ -74,7 +73,7 @@ public interface IRScope {
     /**
      * Get Local Variable from this scope
      */
-    public LocalVariable getLocalVariable(String name);
+    public LocalVariable getLocalVariable(String name, int depth);
 
     public String getName();
 
@@ -95,4 +94,10 @@ public interface IRScope {
 
     /* Run any necessary passes to get the IR ready for interpretation */
     public void prepareForInterpretation();
+
+    /* Record a begin block -- not all scope implementations can handle them */
+    public void recordBeginBlock(IRClosure beginBlockClosure);
+
+    /* Record an end block -- not all scope implementations can handle them */
+    public void recordEndBlock(IRClosure endBlockClosure);
 }

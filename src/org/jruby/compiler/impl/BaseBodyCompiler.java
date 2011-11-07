@@ -5,9 +5,7 @@
 package org.jruby.compiler.impl;
 
 import java.io.PrintStream;
-import java.lang.reflect.InvocationTargetException;
 import java.math.BigInteger;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -25,7 +23,6 @@ import org.jruby.RubyBoolean;
 import org.jruby.RubyClass;
 import org.jruby.RubyException;
 import org.jruby.RubyFixnum;
-import org.jruby.RubyFloat;
 import org.jruby.RubyHash;
 import org.jruby.RubyInstanceConfig;
 import org.jruby.RubyMatchData;
@@ -71,7 +68,6 @@ import org.jruby.runtime.opto.OptoFactory;
 import org.jruby.util.ByteList;
 import org.jruby.util.JavaNameMangler;
 import org.jruby.util.SafePropertyAccessor;
-import org.jruby.util.StringSupport;
 import org.objectweb.asm.Label;
 import org.objectweb.asm.Type;
 import static org.objectweb.asm.Opcodes.*;
@@ -434,16 +430,13 @@ public abstract class BaseBodyCompiler implements BodyCompiler {
 
     public void createNewString(ArrayCallback callback, int count, Encoding encoding) {
         loadRuntime();
-        ByteList startingDstr = new ByteList(StandardASMCompiler.STARTING_DSTR_SIZE);
-
-        if (encoding != null) {
-            startingDstr.setEncoding(encoding);
+        method.ldc(StandardASMCompiler.STARTING_DSTR_FACTOR * count);
+        if (encoding == null) {
+            method.invokestatic(p(RubyString.class), "newStringLight", sig(RubyString.class, Ruby.class, int.class));
+        } else {
+            script.getCacheCompiler().cacheEncoding(this, encoding);
+            method.invokestatic(p(RubyString.class), "newStringLight", sig(RubyString.class, Ruby.class, int.class, Encoding.class));
         }
-        
-        script.getCacheCompiler().cacheByteList(this, startingDstr);
-        method.invokevirtual(p(ByteList.class), "dup", sig(ByteList.class));
-        method.ldc(StringSupport.CR_7BIT);
-        method.invokestatic(p(RubyString.class), "newStringShared", sig(RubyString.class, Ruby.class, ByteList.class, int.class));
 
         for (int i = 0; i < count; i++) {
             callback.nextValue(this, null, i);
@@ -1375,6 +1368,19 @@ public abstract class BaseBodyCompiler implements BodyCompiler {
             method.invokestatic(p(RubyRegexp.class), "newDRegexpEmbedded", sig(RubyRegexp.class, params(Ruby.class, RubyString.class, int.class))); //[reg]
         }
     }
+    
+    public void createDRegexp19(ArrayCallback arrayCallback, Object[] sourceArray, int options) {
+        boolean onceOnly = (options & ReOptions.RE_OPTION_ONCE) != 0;   // for regular expressions with the /o flag
+
+        if (onceOnly) {
+            script.getCacheCompiler().cacheDRegexp19(this, arrayCallback, sourceArray, options);
+        } else {
+            loadRuntime();
+            createObjectArray(sourceArray, arrayCallback);
+            method.ldc(options);
+            method.invokestatic(p(RubyRegexp.class), "newDRegexpEmbedded19", sig(RubyRegexp.class, params(Ruby.class, IRubyObject[].class, int.class))); //[reg]
+        }
+    }
 
     public void pollThreadEvents() {
         if (!RubyInstanceConfig.THREADLESS_COMPILE_ENABLED) {
@@ -1589,7 +1595,7 @@ public abstract class BaseBodyCompiler implements BodyCompiler {
     }
 
     protected String getNewRescueName() {
-        return "rescue_" + (script.getAndIncrementRescueNumber()) + "$RUBY$SYNTHETIC" + JavaNameMangler.mangleStringForCleanJavaIdentifier(getRubyName());
+        return "rescue_" + (script.getAndIncrementRescueNumber()) + "$RUBY$SYNTHETIC" + JavaNameMangler.mangleMethodName(getRubyName());
     }
 
     public void storeExceptionInErrorInfo() {
@@ -2261,7 +2267,7 @@ public abstract class BaseBodyCompiler implements BodyCompiler {
         String classMethodName = null;
         String rubyName;
         if (receiverCallback == null) {
-            String mangledName = JavaNameMangler.mangleStringForCleanJavaIdentifier(name);
+            String mangledName = JavaNameMangler.mangleMethodName(name);
             classMethodName = "class_" + script.getAndIncrementMethodIndex() + "$RUBY$" + mangledName;
             rubyName = mangledName;
         } else {
@@ -2389,7 +2395,7 @@ public abstract class BaseBodyCompiler implements BodyCompiler {
     }
 
     public void defineModule(final String name, final StaticScope staticScope, final CompilerCallback pathCallback, final CompilerCallback bodyCallback, final ASTInspector inspector) {
-        String mangledName = JavaNameMangler.mangleStringForCleanJavaIdentifier(name);
+        String mangledName = JavaNameMangler.mangleMethodName(name);
         String moduleMethodName = "module__" + script.getAndIncrementMethodIndex() + "$RUBY$" + mangledName;
         
         // cache scope for load in class body
@@ -2593,14 +2599,8 @@ public abstract class BaseBodyCompiler implements BodyCompiler {
             CompilerCallback body, CompilerCallback args,
             CompilerCallback receiver, ASTInspector inspector, boolean root,
             String filename, int line, String parameterDesc) {
-        // TODO: build arg list based on number of args, optionals, etc
-        String newMethodName;
-        if (root && SafePropertyAccessor.getBoolean("jruby.compile.toplevel", false)) {
-            newMethodName = name;
-        } else {
-            String mangledName = JavaNameMangler.mangleStringForCleanJavaIdentifier(name);
-            newMethodName = "method__" + script.getAndIncrementMethodIndex() + "$RUBY$" + mangledName;
-        }
+        String mangledName = JavaNameMangler.mangleMethodName(name);
+        String newMethodName = "method__" + script.getAndIncrementMethodIndex() + "$RUBY$" + mangledName;
 
         // prepare to call "def" utility method to handle def logic
         loadThreadContext();
@@ -2889,7 +2889,7 @@ public abstract class BaseBodyCompiler implements BodyCompiler {
     }
 
     public void loadEncoding(Encoding encoding) {
-        script.getCacheCompiler().cacheEncoding(this, encoding);
+        script.getCacheCompiler().cacheRubyEncoding(this, encoding);
     }
 
     public void definedCall(String name) {

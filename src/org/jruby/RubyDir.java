@@ -37,10 +37,17 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.List;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+
 import org.jruby.anno.JRubyMethod;
 import org.jruby.anno.JRubyClass;
-import org.jruby.ext.posix.util.Platform;
+import jnr.posix.util.Platform;
 
 import org.jruby.javasupport.JavaUtil;
 import org.jruby.runtime.Block;
@@ -182,6 +189,34 @@ public class RubyDir extends RubyObject {
         Ruby runtime = context.getRuntime();
         List<ByteList> dirs;
         if (args.length == 1) {
+            Pattern pattern = Pattern.compile("file:(.*)!/(.*)");
+            String glob = args[0].toString();
+            Matcher matcher = pattern.matcher(glob);
+            if (matcher.find()) {
+                String jarFileName = matcher.group(1);
+                String jarUri = "file:" + jarFileName + "!/";
+                String fileGlobString = matcher.group(2);
+                String filePatternString = convertGlobToRegEx(fileGlobString);
+                Pattern filePattern = Pattern.compile(filePatternString);
+                try {
+                    JarFile jarFile = new JarFile(jarFileName);
+                    List<RubyString> allFiles = new ArrayList<RubyString>();
+                    Enumeration<JarEntry> entries = jarFile.entries();
+                    while (entries.hasMoreElements()) {
+                        String entry = entries.nextElement().getName();
+                        String chomped_entry = entry.endsWith("/") ? entry.substring(0, entry.length() - 1) : entry;
+                        if (filePattern.matcher(chomped_entry).find()) {
+                            allFiles.add(RubyString.newString(runtime, jarUri + chomped_entry.toString()));
+                        }
+                    }
+                    IRubyObject[] tempFileList = new IRubyObject[allFiles.size()];
+                    allFiles.toArray(tempFileList);
+                    return runtime.newArrayNoCopy(tempFileList);
+                } catch (IOException e) {
+                    return runtime.newArrayNoCopy(new IRubyObject[0]);
+                }
+            }
+            
             ByteList globPattern = null;
             if (runtime.is1_9() && args[0].respondsTo("to_path")) {
                 globPattern = args[0].callMethod(context, "to_path").convertToString().getByteList();
@@ -196,6 +231,84 @@ public class RubyDir extends RubyObject {
         return asRubyStringList(runtime, dirs);
     }
 
+    private static String convertGlobToRegEx(String line) {
+        line = line.trim();
+        StringBuilder sb = new StringBuilder(line.length());
+        sb.append("^");
+        boolean escaping = false;
+        int inCurlies = 0;
+        for (char currentChar : line.toCharArray()) {
+            switch (currentChar) {
+            case '*':
+                if (escaping)
+                    sb.append("\\*");
+                else
+                    sb.append("[^/]*");
+                escaping = false;
+                break;
+            case '?':
+                if (escaping)
+                    sb.append("\\?");
+                else
+                    sb.append('.');
+                escaping = false;
+                break;
+            case '.':
+            case '(':
+            case ')':
+            case '+':
+            case '|':
+            case '^':
+            case '$':
+            case '@':
+            case '%':
+                sb.append('\\');
+                sb.append(currentChar);
+                escaping = false;
+                break;
+            case '\\':
+                if (escaping) {
+                    sb.append("\\\\");
+                    escaping = false;
+                } else
+                    escaping = true;
+                break;
+            case '{':
+                if (escaping) {
+                    sb.append("\\{");
+                } else {
+                    sb.append('(');
+                    inCurlies++;
+                }
+                escaping = false;
+                break;
+            case '}':
+                if (inCurlies > 0 && !escaping) {
+                    sb.append(')');
+                    inCurlies--;
+                } else if (escaping)
+                    sb.append("\\}");
+                else
+                    sb.append("}");
+                escaping = false;
+                break;
+            case ',':
+                if (inCurlies > 0 && !escaping) {
+                    sb.append('|');
+                } else if (escaping)
+                    sb.append("\\,");
+                else
+                    sb.append(",");
+                break;
+            default:
+                escaping = false;
+                sb.append(currentChar);
+            }
+        }
+        sb.append("$");
+        return sb.toString().replace("[^/]*[^/]*/", ".*").replace("[^/]*[^/]*", ".*");
+    }
+    
     /**
      * Returns an array of filenames matching the specified wildcard pattern
      * <code>pat</code>. If a block is given, the array is iterated internally
@@ -287,13 +400,30 @@ public class RubyDir extends RubyObject {
     }
 
     private static List<String> entriesIntoAJarFile(Ruby runtime, String path) {
-        List<ByteList> dirs = Dir.push_glob(runtime.getCurrentDirectory(),
-                RubyString.newString(runtime, path + "/*").getByteList(), Dir.FNM_DOTMATCH);
-
+        String file = path.substring(5);
+        int bang = file.indexOf('!');
+        if (bang == -1) {
+          return entriesIntoADirectory(runtime, path.substring(5));
+        }
+        if (bang == file.length() - 1) {
+            return new ArrayList<String>();
+        }
+        String jar = file.substring(0, bang);
+        String after = file.substring(bang + 2);
+        JarFile jf;
+        try {
+            jf = new JarFile(jar);
+        } catch (IOException e) {
+            throw new RuntimeException("Valid JAR file expected", e);
+        }
+        
         List<String> fileList = new ArrayList<String>();
-        for (ByteList file : dirs) {
-            String[] split = file.toString().split("/");
-            fileList.add(split[split.length - 1]);
+        Enumeration<? extends ZipEntry> entries = jf.entries();
+        while (entries.hasMoreElements()) {
+            String zipEntry = entries.nextElement().getName();
+            if (zipEntry.matches(after + "/" + "[^/]+")) {
+                fileList.add(zipEntry.substring(after.length() + 1));
+            }
         }
 
         return fileList;

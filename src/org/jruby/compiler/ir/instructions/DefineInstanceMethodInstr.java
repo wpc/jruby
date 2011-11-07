@@ -5,7 +5,6 @@ import java.util.Map;
 import org.jruby.MetaClass;
 import org.jruby.Ruby;
 import org.jruby.RubyModule;
-import org.jruby.RubyObject;
 
 import org.jruby.compiler.ir.IRMethod;
 import org.jruby.compiler.ir.operands.Label;
@@ -25,10 +24,8 @@ import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.Visibility;
 
-// SSS FIXME: Should we merge DefineInstanceMethod and DefineClassMethod instructions?
-// identical except for 1 bit in interpret -- or will they diverge?
 public class DefineInstanceMethodInstr extends OneOperandInstr {
-    public final IRMethod method;
+    private final IRMethod method;
 
     public DefineInstanceMethodInstr(Operand container, IRMethod method) {
         super(Operation.DEF_INST_METH, null, container);
@@ -37,7 +34,11 @@ public class DefineInstanceMethodInstr extends OneOperandInstr {
 
     @Override
     public String toString() {
-        return super.toString() + "(" + getArg() + ", " + method.getName() + ")";
+        return getOperation() + "(" + getArg() + ", " + method.getName() + ")";
+    }
+    
+    public IRMethod getMethod() {
+        return method;
     }
 
     @Override
@@ -48,20 +49,18 @@ public class DefineInstanceMethodInstr extends OneOperandInstr {
     @Override
     public void simplifyOperands(Map<Operand, Operand> valueMap) {
         super.simplifyOperands(valueMap);
-        Operand v = valueMap.get(getArg());
-        // SSS FIXME: Dumb design leaking operand into IRScopeImpl -- hence this setting going on here.  Fix it!
-        if (v != null)
-            method.setContainer(v);
     }
 
-    // SSS FIXME: Go through this and DefineClassmethodInstr.interpret, clean up, extract common code
+    // SSS FIXME: Go through this and DefineClassMethodInstr.interpret, clean up, extract common code
     @Override
     public Label interpret(InterpreterContext interp, ThreadContext context, IRubyObject self) {
-        RubyObject arg   = (RubyObject)getArg().retrieve(interp, context, self);
-        RubyModule clazz = (arg instanceof RubyModule) ? (RubyModule)arg : arg.getMetaClass();
+        // SSS FIXME: This is a temporary solution that uses information from the stack.
+        // This instruction and this logic will be re-implemented to not use implicit information from the stack.
+        // Till such time, this code implements the correct semantics.
+        RubyModule clazz = context.getRubyClass();
         String     name  = method.getName();
 
-		  // Error checks and warnings on method definitions
+        // Error checks and warnings on method definitions
         Ruby runtime = context.getRuntime();
         if (clazz == runtime.getDummy()) {
             throw runtime.newTypeError("no class/module to add method");
@@ -82,8 +81,9 @@ public class DefineInstanceMethodInstr extends OneOperandInstr {
 
         DynamicMethod newMethod = new InterpretedIRMethod(method, visibility, clazz);
         clazz.addMethod(name, newMethod);
+        //System.out.println("Added " + name + " to " + clazz + "; self is " + self);
 
-        if (visibility == Visibility.MODULE_FUNCTION) {
+        if (context.getCurrentVisibility() == Visibility.MODULE_FUNCTION) {
             clazz.getSingletonClass().addMethod(name, new WrapperMethod(clazz.getSingletonClass(), newMethod, Visibility.PUBLIC));
             clazz.callMethod(context, "singleton_method_added", runtime.fastNewSymbol(name));
         }

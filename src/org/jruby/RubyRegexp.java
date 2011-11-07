@@ -312,10 +312,26 @@ public class RubyRegexp extends RubyObject implements ReOptions, EncodingCapable
     public static RubyRegexp newDRegexpEmbedded(Ruby runtime, RubyString pattern, int embeddedOptions) {
         try {
             RegexpOptions options = RegexpOptions.fromEmbeddedOptions(embeddedOptions);
+            // FIXME: Massive hack (fix in DRegexpNode too for interpreter)
+            if (pattern.getEncoding() == USASCIIEncoding.INSTANCE) {
+                pattern.setEncoding(ASCIIEncoding.INSTANCE);
+            }
             return new RubyRegexp(runtime, pattern.getByteList(), options);
         } catch (RaiseException re) {
             throw runtime.newRegexpError(re.getMessage());
         }
+    }
+    
+    public static RubyRegexp newDRegexpEmbedded19(Ruby runtime, IRubyObject[] strings, int embeddedOptions) {
+        try {
+            RegexpOptions options = RegexpOptions.fromEmbeddedOptions(embeddedOptions);
+            RubyString pattern = preprocessDRegexp(runtime, strings, options);
+            
+            return new RubyRegexp(runtime, pattern.getByteList(), options);
+        } catch (RaiseException re) {
+            throw runtime.newRegexpError(re.getMessage());
+        }
+        
     }
     
     public static RubyRegexp newRegexp(Ruby runtime, ByteList pattern) {
@@ -341,12 +357,12 @@ public class RubyRegexp extends RubyObject implements ReOptions, EncodingCapable
 
     /** rb_reg_options
      */
-    private RegexpOptions getOptions() {
+    public RegexpOptions getOptions() {
         check();
         return options;
     }
 
-    final Regex getPattern() {
+    public final Regex getPattern() {
         check();
         return pattern;
     }
@@ -656,6 +672,46 @@ public class RubyRegexp extends RubyObject implements ReOptions, EncodingCapable
 
     public static void preprocessCheck(Ruby runtime, ByteList bytes) {
         preprocess(runtime, bytes, bytes.getEncoding(), new Encoding[]{null}, ErrorMode.RAISE);
+    }
+    
+    // rb_reg_preprocess_dregexp
+    public static RubyString preprocessDRegexp(Ruby runtime, IRubyObject[] strings, RegexpOptions options) {
+        RubyString string = null;
+        Encoding regexpEnc = null;
+        
+        for (int i = 0; i < strings.length; i++) {
+            RubyString str = strings[i].convertToString();
+            Encoding strEnc = str.getEncoding();
+            
+            if (options.isEncodingNone() && strEnc != ASCIIEncoding.INSTANCE) {
+                if (str.getCodeRange() != StringSupport.CR_7BIT) {
+                    throw runtime.newRegexpError("/.../n has a non escaped non ASCII character in non ASCII-8BIT script");
+                }
+                strEnc = ASCIIEncoding.INSTANCE;
+            }
+            
+            Encoding[] fixedEnc = new Encoding[1];
+            ByteList buf = RubyRegexp.preprocess(runtime, str.getByteList(), strEnc, fixedEnc, RubyRegexp.ErrorMode.PREPROCESS);
+            
+            if (fixedEnc[0] != null) {
+                if (regexpEnc != null && regexpEnc != fixedEnc[0]) {
+                    throw runtime.newRegexpError("encoding mismatch in dynamic regexp: " + new String(regexpEnc.getName()) + " and " + new String(fixedEnc[0].getName()));
+                }
+                regexpEnc = fixedEnc[0];
+            }
+            
+            if (string == null) {
+                string = (RubyString)str.dup();
+            } else {
+                string.append19(str);
+            }
+        }
+        
+        if (regexpEnc != null) {
+            string.setEncoding(regexpEnc);
+        }
+
+        return string;
     }
 
     private void check() {
@@ -1105,6 +1161,7 @@ public class RubyRegexp extends RubyObject implements ReOptions, EncodingCapable
         appendRegexpString19(runtime, description, s, start, len, enc);
         description.append((byte)'/');
         appendOptions(description, options);
+        if (options.isEncodingNone()) description.append((byte) 'n');
         return description; 
     }
 
@@ -1515,7 +1572,12 @@ public class RubyRegexp extends RubyObject implements ReOptions, EncodingCapable
         // FIXME: This is pretty gross; we should have a cleaner initialization
         // that doesn't depend on package-visible fields and ideally is atomic,
         // probably using an immutable structure we replace all at once.
-        match.regs = matcher.getRegion(); // lazy, null when no groups defined
+
+        // The region must be cloned because a subsequent match will update the
+        // region, resulting in the MatchData created here pointing at the
+        // incorrect region (capture/group).
+        Region region = matcher.getRegion(); // lazy, null when no groups defined
+        match.regs = region == null ? null : region.clone();
         match.begin = matcher.getBegin();
         match.end = matcher.getEnd();
         match.pattern = pattern;
@@ -1693,14 +1755,19 @@ public class RubyRegexp extends RubyObject implements ReOptions, EncodingCapable
         int p = start;
         int end = p + len;
         boolean needEscape = false;
-        while (p < end) {
-            int c = bytes[p] & 0xff;
-            if (c == '/' || (!enc.isPrint(c) && enc.length(bytes, p, end) == 1)) {
-                needEscape = true;
-                break;
+        if (enc.isAsciiCompatible()) {
+            while (p < end) {
+                int c = bytes[p] & 0xff;
+                if (c == '/' || (!enc.isPrint(c) && enc.length(bytes, p, end) == 1)) {
+                    needEscape = true;
+                    break;
+                }
+                p += enc.length(bytes, p, end);
             }
-            p += enc.length(bytes, p, end);
+        } else {
+            needEscape = true;
         }
+        
         if (!needEscape) {
             to.append(bytes, start, len);
         } else {

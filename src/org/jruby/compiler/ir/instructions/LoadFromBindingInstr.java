@@ -29,8 +29,8 @@ import org.jruby.runtime.builtin.IRubyObject;
 
 public class LoadFromBindingInstr extends Instr {
     private IRMethod sourceMethod;
-    private int      bindingSlot;
-    private String   slotName;
+    private int bindingSlot;
+    private String slotName;
 
     public LoadFromBindingInstr(Variable v, IRExecutionScope scope, String slotName) {
         super(Operation.BINDING_LOAD, v);
@@ -48,22 +48,20 @@ public class LoadFromBindingInstr extends Instr {
         return new Operand[] { };
     }
 
-    public void simplifyOperands(Map<Operand, Operand> valueMap) {
-        /* Nothing to do */
-    }
-
     @Override
     public String toString() {
-        return "" + result + " = BINDING(" + sourceMethod + ")." + getSlotName();
+        return "" + getResult() + " = BINDING(" + sourceMethod + ")." + getSlotName();
     }
 
     public Instr cloneForInlining(InlinerInfo ii) {
-        return new LoadFromBindingInstr(ii.getRenamedVariable(result), sourceMethod, getSlotName());
+        return new LoadFromBindingInstr(ii.getRenamedVariable(getResult()), sourceMethod, getSlotName());
     }
 
     // Any exception raised by the execution of this instruction is an interpreter/compiler bug
     @Override
-    public boolean canRaiseException() { return false; }
+    public boolean canRaiseException() {
+        return false;
+    }
 
     @Interp
     @Override
@@ -72,7 +70,9 @@ public class LoadFromBindingInstr extends Instr {
         
         if (bindingSlot == -1) bindingSlot = sourceMethod.getBindingSlot(getSlotName());
         
-        interp.setLocalVariable(v.getLocation(), interp.getSharedBindingVariable(context, bindingSlot));
+        interp.setLocalVariable(v.getScopeDepth(), v.getLocation(),
+                interp.getSharedBindingVariable(context, bindingSlot));
+        
         return null;
     }
 }

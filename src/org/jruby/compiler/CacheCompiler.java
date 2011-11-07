@@ -24,7 +24,9 @@ public interface CacheCompiler {
     
     public void cacheByteList(BaseBodyCompiler method, ByteList contents);
 
-    public void cacheEncoding(BaseBodyCompiler method, Encoding encoding);
+    public void cacheRubyEncoding(BaseBodyCompiler method, Encoding encoding);
+
+    public int cacheEncoding(BaseBodyCompiler method, Encoding encoding);
     
     public void cacheSymbol(BaseBodyCompiler method, String symbol);
     
@@ -41,6 +43,8 @@ public interface CacheCompiler {
     public void cacheRegexp(BaseBodyCompiler method, ByteList pattern, int options);
 
     public void cacheDRegexp(BaseBodyCompiler method, CompilerCallback createStringCallback, int options);
+
+    public void cacheDRegexp19(BaseBodyCompiler method, ArrayCallback arrayCallback, Object[] sourceArray, int options);
 
     /**
      * Construct and cache a closure body, using the given parameters.

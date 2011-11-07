@@ -58,7 +58,6 @@ import org.jruby.anno.JRubyMethod;
 import org.jruby.compiler.impl.SkinnyMethodAdapter;
 import org.jruby.exceptions.RaiseException;
 import org.jruby.internal.runtime.methods.DynamicMethod;
-import org.jruby.internal.runtime.methods.JavaMethod;
 import org.jruby.java.codegen.RealClassGenerator;
 import org.jruby.java.codegen.Reified;
 import org.jruby.javasupport.Java;
@@ -71,13 +70,13 @@ import org.jruby.runtime.MethodIndex;
 import org.jruby.runtime.ObjectAllocator;
 import org.jruby.runtime.ObjectMarshal;
 import org.jruby.runtime.ThreadContext;
-import org.jruby.runtime.Visibility;
 import static org.jruby.runtime.Visibility.*;
 import static org.jruby.CompatVersion.*;
 import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.runtime.callsite.CacheEntry;
 import org.jruby.runtime.marshal.MarshalStream;
 import org.jruby.runtime.marshal.UnmarshalStream;
+import org.jruby.runtime.opto.Invalidator;
 import org.jruby.util.ClassCache.OneShotClassLoader;
 import org.jruby.util.ClassDefiningClassLoader;
 import org.jruby.util.CodegenUtils;
@@ -268,6 +267,8 @@ public class RubyClass extends RubyModule {
     }
     
     private volatile VariableAccessor objectIdAccessor = VariableAccessor.DUMMY_ACCESSOR;
+    
+    private volatile VariableAccessor nativeHandleAccessor = VariableAccessor.DUMMY_ACCESSOR;
 
     private synchronized final VariableAccessor allocateVariableAccessor(String name) {
         String[] myVariableNames = variableNames;
@@ -315,12 +316,23 @@ public class RubyClass extends RubyModule {
         return objectIdAccessor;
     }
 
+    public synchronized VariableAccessor getNativeHandleAccessorForWrite() {
+        if (nativeHandleAccessor == VariableAccessor.DUMMY_ACCESSOR) nativeHandleAccessor = allocateVariableAccessor("native_handle");
+        return nativeHandleAccessor;
+    }
+
+    public VariableAccessor getNativeHandleAccessorForRead() {
+        return nativeHandleAccessor;
+    }
+
     public int getVariableTableSize() {
         return variableAccessors.size();
     }
 
-    public int getVariableTableSizeWithObjectId() {
-        return variableAccessors.size() + (objectIdAccessor == VariableAccessor.DUMMY_ACCESSOR ? 0 : 1);
+    public int getVariableTableSizeWithExtras() {
+        return variableAccessors.size()
+                + (objectIdAccessor == VariableAccessor.DUMMY_ACCESSOR ? 0 : 1)
+                + (nativeHandleAccessor == VariableAccessor.DUMMY_ACCESSOR ? 0 : 1);
     }
 
     public Map<String, VariableAccessor> getVariableTableCopy() {
@@ -989,11 +1001,27 @@ public class RubyClass extends RubyModule {
     @Override
     public void invalidateCacheDescendants() {
         super.invalidateCacheDescendants();
-        // update all subclasses
+        
         synchronized (runtime.getHierarchyLock()) {
             Set<RubyClass> mySubclasses = subclasses;
             if (mySubclasses != null) for (RubyClass subclass : mySubclasses) {
                 subclass.invalidateCacheDescendants();
+            }
+        }
+    }
+    
+    public void addInvalidatorsAndFlush(List<Invalidator> invalidators) {
+        // add this class's invalidators to the aggregate
+        invalidators.add(methodInvalidator);
+        
+        // if we're not at boot time, don't bother fully clearing caches
+        if (!runtime.isBooting()) cachedMethods.clear();
+        
+        // cascade into subclasses
+        synchronized (runtime.getHierarchyLock()) {
+            Set<RubyClass> mySubclasses = subclasses;
+            if (mySubclasses != null) for (RubyClass subclass : mySubclasses) {
+                subclass.addInvalidatorsAndFlush(invalidators);
             }
         }
     }
@@ -1281,7 +1309,7 @@ public class RubyClass extends RubyModule {
         // define instance methods
         for (Map.Entry<String,DynamicMethod> methodEntry : getMethods().entrySet()) {
             String methodName = methodEntry.getKey();
-            String javaMethodName = JavaNameMangler.mangleStringForCleanJavaIdentifier(methodName);
+            String javaMethodName = JavaNameMangler.mangleMethodName(methodName);
             Map<Class,Map<String,Object>> methodAnnos = getMethodAnnotations().get(methodName);
             List<Map<Class,Map<String,Object>>> parameterAnnos = getParameterAnnotations().get(methodName);
             Class[] methodSignature = getMethodSignatures().get(methodName);
@@ -1351,7 +1379,7 @@ public class RubyClass extends RubyModule {
         // define class/static methods
         for (Map.Entry<String,DynamicMethod> methodEntry : getMetaClass().getMethods().entrySet()) {
             String methodName = methodEntry.getKey();
-            String javaMethodName = JavaNameMangler.mangleStringForCleanJavaIdentifier(methodName);
+            String javaMethodName = JavaNameMangler.mangleMethodName(methodName);
             Map<Class,Map<String,Object>> methodAnnos = getMetaClass().getMethodAnnotations().get(methodName);
             List<Map<Class,Map<String,Object>>> parameterAnnos = getMetaClass().getParameterAnnotations().get(methodName);
             Class[] methodSignature = getMetaClass().getMethodSignatures().get(methodName);

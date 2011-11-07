@@ -1,5 +1,6 @@
 package org.jruby.compiler.ir;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -11,18 +12,19 @@ import org.jruby.compiler.ir.operands.Label;
 import org.jruby.compiler.ir.operands.Operand;
 import org.jruby.compiler.ir.operands.Variable;
 import org.jruby.compiler.ir.compiler_pass.CompilerPass;
-import org.jruby.compiler.ir.operands.TemporaryClosureVariable;
 import org.jruby.compiler.ir.operands.TemporaryVariable;
 import org.jruby.compiler.ir.operands.RenamedVariable;
 import org.jruby.compiler.ir.compiler_pass.AddBindingInstructions;
-import org.jruby.compiler.ir.compiler_pass.CFG_Builder;
-import org.jruby.compiler.ir.compiler_pass.IR_Printer;
+import org.jruby.compiler.ir.compiler_pass.CFGBuilder;
+import org.jruby.compiler.ir.compiler_pass.IRPrinter;
 import org.jruby.compiler.ir.compiler_pass.InlineTest;
 import org.jruby.compiler.ir.compiler_pass.LinearizeCFG;
 import org.jruby.compiler.ir.compiler_pass.LiveVariableAnalysis;
 import org.jruby.compiler.ir.compiler_pass.opts.DeadCodeElimination;
 import org.jruby.compiler.ir.compiler_pass.opts.LocalOptimizationPass;
 import org.jruby.parser.StaticScope;
+import org.jruby.util.log.Logger;
+import org.jruby.util.log.LoggerFactory;
 
 /**
  * Right now, this class abstracts 5 different scopes: Script, Module, Class, 
@@ -57,10 +59,10 @@ import org.jruby.parser.StaticScope;
  * and so on ...
  */
 public abstract class IRScopeImpl implements IRScope {
-    // SSS FIXME: Dumb design leaking a live operand into a non-operand!!
-    Operand container;       // Parent container for this context
-    RubyModule containerModule; // Live version of container
-    IRScope lexicalParent;  // Lexical parent scope
+    private static final Logger LOG = LoggerFactory.getLogger("IRScope");
+
+    private IRScope lexicalParent;  // Lexical parent scope
+    private RubyModule containerModule; // Live version of container
 
     private String name;
 
@@ -78,21 +80,10 @@ public abstract class IRScopeImpl implements IRScope {
 
     private StaticScope staticScope;
 
-    public IRScopeImpl(IRScope lexicalParent, Operand container, String name, StaticScope staticScope) {
+    public IRScopeImpl(IRScope lexicalParent, String name, StaticScope staticScope) {
         this.lexicalParent = lexicalParent;
-        this.container = container;
         this.name = name;
         this.staticScope = staticScope;
-    }
-
-    // Update the containing scope
-    public void setContainer(Operand o) {
-        container = o;
-    }
-
-    // Returns the containing scope!
-    public Operand getContainer() {
-        return container;
     }
 
     public RubyModule getContainerModule() {
@@ -105,12 +96,19 @@ public abstract class IRScopeImpl implements IRScope {
     }
 
     public IRModule getNearestModule() {
-        IRScope current = lexicalParent;
+        IRScope current = this;
 
-        while (current != null && !(current instanceof IRModule) && !(current instanceof IRScript)) {
+        while (current != null && !((current instanceof IRModule) || (current instanceof IRScript) || (current instanceof IREvalScript))) {
             current = current.getLexicalParent();
         }
-        
+
+        // In eval mode, we dont have a lexical view of what module we are nested in
+        // because binding_eval, class_eval, module_eval, instance_eval can switch
+        // around the lexical scope for evaluation to be something else.
+        if (current instanceof IREvalScript) {
+            return null;
+        }
+
         if (current instanceof IRScript) { // Possible we are a method at top-level.
             current = ((IRScript) current).getRootClass();
         }
@@ -120,7 +118,7 @@ public abstract class IRScopeImpl implements IRScope {
     
     public IRMethod getNearestMethod() {
         IRScope current = this;
-        
+
         while (current != null && !(current instanceof IRMethod)) {
             current = current.getLexicalParent();
         }
@@ -130,14 +128,23 @@ public abstract class IRScopeImpl implements IRScope {
         return (IRMethod) current;
     }
 
+    /**
+     * Returns the top level executable scope
+     */
+    public IRScope getTopLevelScope() {
+        IRScope current = this;
+
+        while (!(current instanceof IREvalScript) && !(current instanceof IRScript)) {
+            current = current.getLexicalParent();
+        }
+        
+        return current;
+    }
+
     public int getNextClosureId() {
         nextClosureIndex++;
         
         return nextClosureIndex;
-    }
-
-    public Variable getNewTemporaryClosureVariable(int closureId) {
-        return new TemporaryClosureVariable(closureId, allocateNextPrefixedName("%cl_" + closureId));
     }
 
     public Variable getNewTemporaryVariable() {
@@ -146,7 +153,7 @@ public abstract class IRScopeImpl implements IRScope {
 
     // Generate a new variable for inlined code (for ease of debugging, use differently named variables for inlined code)
     public Variable getNewInlineVariable() {
-		  // Use the temporary variable counters for allocating temporary variables
+        // Use the temporary variable counters for allocating temporary variables
         return new RenamedVariable("%i", allocateNextPrefixedName("%v"));
     }
 
@@ -173,7 +180,7 @@ public abstract class IRScopeImpl implements IRScope {
     }
 
     // Enebo: We should just make n primitive int and not take the hash hit
-    private int allocateNextPrefixedName(String prefix) {
+    protected int allocateNextPrefixedName(String prefix) {
         int index = getPrefixCountSize(prefix);
         
         nextVarIndex.put(prefix, index + 1);
@@ -216,7 +223,7 @@ public abstract class IRScopeImpl implements IRScope {
     }
 
     public List<Instr> getInstrs() {
-        return null;
+        return Collections.EMPTY_LIST;
     }
 
     @Override
@@ -238,6 +245,12 @@ public abstract class IRScopeImpl implements IRScope {
 
     /* Run any necessary passes to get the IR ready for interpretation */
     public void prepareForInterpretation() {
+        // Should be an execution scope
+        if (!(this instanceof IRExecutionScope)) return;
+
+        // forcibly clear out the shared eval-scope variable allocator each time this method executes
+        ((IRExecutionScope)this).initEvalScopeVariableAllocator(true); 
+
         // SSS FIXME: We should configure different optimization levels
         // and run different kinds of analysis depending on time budget.  Accordingly, we need to set
         // IR levels/states (basic, optimized, etc.) and the
@@ -250,10 +263,10 @@ public abstract class IRScopeImpl implements IRScope {
         runCompilerPass(new LocalOptimizationPass());
         printPass("After local optimization pass");
 
-        runCompilerPass(new CFG_Builder());
-        if (RubyInstanceConfig.IR_TEST_INLINER != null) {
+        runCompilerPass(new CFGBuilder());
+        if (!RubyInstanceConfig.IR_TEST_INLINER.equals("none")) {
             if (RubyInstanceConfig.IR_COMPILER_DEBUG) {
-                System.out.println("Asked to inline " + RubyInstanceConfig.IR_TEST_INLINER);
+                LOG.info("Asked to inline " + RubyInstanceConfig.IR_TEST_INLINER);
             }
             runCompilerPass(new InlineTest(RubyInstanceConfig.IR_TEST_INLINER));
             runCompilerPass(new LocalOptimizationPass());
@@ -262,15 +275,14 @@ public abstract class IRScopeImpl implements IRScope {
         if (RubyInstanceConfig.IR_LIVE_VARIABLE) runCompilerPass(new LiveVariableAnalysis());
         if (RubyInstanceConfig.IR_DEAD_CODE) runCompilerPass(new DeadCodeElimination());
         if (RubyInstanceConfig.IR_DEAD_CODE) printPass("After DCE ");
-        runCompilerPass(new AddBindingInstructions());
         runCompilerPass(new LinearizeCFG());
         printPass("After CFG Linearize");
     }
     
     private void printPass(String message) {
         if (RubyInstanceConfig.IR_COMPILER_DEBUG) {
-            System.out.println("################## " + message + "##################");
-            runCompilerPass(new IR_Printer());        
+            LOG.info("################## " + message + "##################");
+            runCompilerPass(new IRPrinter());        
         }
     }
 
@@ -280,5 +292,15 @@ public abstract class IRScopeImpl implements IRScope {
 
     public String toStringVariables() {
         return "";
+    }
+
+    /* Record a begin block -- not all scope implementations can handle them */
+    public void recordBeginBlock(IRClosure beginBlockClosure) {
+        throw new RuntimeException("BEGIN blocks cannot be added to: " + this.getClass().getName());
+    }
+
+    /* Record an end block -- not all scope implementations can handle them */
+    public void recordEndBlock(IRClosure endBlockClosure) {
+        throw new RuntimeException("END blocks cannot be added to: " + this.getClass().getName());
     }
 }

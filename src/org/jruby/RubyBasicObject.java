@@ -1230,7 +1230,7 @@ public class RubyBasicObject implements Cloneable, IRubyObject, Serializable, Co
     /**
      * Get variable table for read purposes. May return null if uninitialized.
      */
-    private Object[] getVariableTableForRead() {
+    protected final Object[] getVariableTableForRead() {
         return varTable;
     }
 
@@ -1238,22 +1238,22 @@ public class RubyBasicObject implements Cloneable, IRubyObject, Serializable, Co
      * Get variable table for write purposes. Initializes if uninitialized, and
      * resizes if necessary.
      */
-    private Object[] getVariableTableForWrite(int index) {
+    protected final Object[] getVariableTableForWrite(int index) {
         Object[] myVarTable = varTable;
         if (myVarTable == null) {
             synchronized (this) {
                 myVarTable = varTable;
                 if (myVarTable == null) {
-                    if (DEBUG) LOG.debug("allocating varTable with size {}", getMetaClass().getRealClass().getVariableTableSizeWithObjectId());
-                    varTable = myVarTable = new Object[getMetaClass().getRealClass().getVariableTableSizeWithObjectId()];
+                    if (DEBUG) LOG.debug("allocating varTable with size {}", getMetaClass().getRealClass().getVariableTableSizeWithExtras());
+                    varTable = myVarTable = new Object[getMetaClass().getRealClass().getVariableTableSizeWithExtras()];
                 }
             }
         } else if (myVarTable.length <= index) {
             synchronized (this) {
                 myVarTable = varTable;
                 if (myVarTable.length <= index) {
-                    if (DEBUG) LOG.debug("resizing from {} to {}", myVarTable.length, getMetaClass().getRealClass().getVariableTableSizeWithObjectId());
-                    Object[] newTable = new Object[getMetaClass().getRealClass().getVariableTableSizeWithObjectId()];
+                    if (DEBUG) LOG.debug("resizing from {} to {}", myVarTable.length, getMetaClass().getRealClass().getVariableTableSizeWithExtras());
+                    Object[] newTable = new Object[getMetaClass().getRealClass().getVariableTableSizeWithExtras()];
                     System.arraycopy(myVarTable, 0, newTable, 0, myVarTable.length);
                     varTable = myVarTable = newTable;
                 }
@@ -1278,6 +1278,16 @@ public class RubyBasicObject implements Cloneable, IRubyObject, Serializable, Co
 
     private void setObjectId(int index, long value) {
         if (index < 0) return;
+        Object[] ivarTable = getVariableTableForWrite(index);
+        ivarTable[index] = value;
+    }
+    
+    public final Object getNativeHandle() {
+        return getMetaClass().getRealClass().getNativeHandleAccessorForRead().get(this);
+    }
+
+    public final void setNativeHandle(Object value) {
+        int index = getMetaClass().getRealClass().getNativeHandleAccessorForWrite().getIndex();
         Object[] ivarTable = getVariableTableForWrite(index);
         ivarTable[index] = value;
     }
@@ -2067,7 +2077,7 @@ public class RubyBasicObject implements Cloneable, IRubyObject, Serializable, Co
      * The actual method that checks frozen with the default frozen message from MRI.
      * If possible, call this instead of {@link #testFrozen}.
      */
-    protected void checkFrozen() {
+    public void checkFrozen() {
         testFrozen();
     }
 

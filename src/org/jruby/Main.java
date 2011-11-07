@@ -40,6 +40,7 @@ package org.jruby;
 import java.io.InputStream;
 import java.io.PrintStream;
 import java.io.File;
+import java.io.FileDescriptor;
 
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -54,6 +55,9 @@ import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.util.SafePropertyAccessor;
 import org.jruby.util.SimpleSampler;
+import org.jruby.util.cli.OutputStrings;
+import org.jruby.util.log.Logger;
+import org.jruby.util.log.LoggerFactory;
 
 /**
  * Class used to launch the interpreter.
@@ -65,6 +69,8 @@ import org.jruby.util.SimpleSampler;
  * @author  jpetersen
  */
 public class Main {
+    private static final Logger LOG = LoggerFactory.getLogger("Main");
+    
     public Main(RubyInstanceConfig config) {
         this(config, false);
     }
@@ -93,37 +99,49 @@ public class Main {
         config.setHardExit(hardExit);
     }
     
-    public void processDotfile() {
+    public static void processDotfile() {
         // try current dir, then home dir
-        String home = SafePropertyAccessor.getProperty("user.dir");
-        File dotfile = new File(home + "/.jrubyrc");
-        if (!dotfile.exists()) {
-            home = SafePropertyAccessor.getProperty("user.home");
-            dotfile = new File(home + "/.jrubyrc");
+        for (String homeProp : new String[] {"user.dir", "user.home"}) {
+            String home = SafePropertyAccessor.getProperty(homeProp);
+            if (home == null) continue;
+            
+            FileInputStream fis = null;
+
+            try {
+                File dotfile = new File(home + "/.jrubyrc");
+                
+                if (!dotfile.exists()) {
+                    continue;
+                }
+                
+                fis = loadJRubyProperties(dotfile, fis);
+                
+                // all good
+                return;
+            } catch (IOException ioe) {
+                // do anything else?
+                LOG.debug("exception loading .jrubyrc", ioe);
+            } catch (SecurityException se) {
+                LOG.debug("exception loading .jrubyrc", se);
+            } finally {
+                if (fis != null) try {fis.close();} catch (Exception e) {}
+            }
         }
-        
-        // no dotfile!
-        if (!dotfile.exists()) return;
-        
+    }
+
+    private static FileInputStream loadJRubyProperties(File dotfile, FileInputStream fis) throws FileNotFoundException, IOException {
         // update system properties with long form jruby properties from .jrubyrc
         Properties sysProps = System.getProperties();
         Properties newProps = new Properties();
-        FileInputStream fis = null;
-        try {
-            // load properties and re-set as jruby.*
-            fis = new FileInputStream(dotfile);
-            newProps.load(fis);
-            for (Map.Entry entry : newProps.entrySet()) {
-                sysProps.put("jruby." + entry.getKey(), entry.getValue());
-            }
-
-            // replace system properties
-            System.setProperties(sysProps);
-        } catch (IOException ioe) {
-            // do anything?
-        } finally {
-            if (fis != null) try {fis.close();} catch (Exception e) {}
+        // load properties and re-set as jruby.*
+        fis = new FileInputStream(dotfile);
+        newProps.load(fis);
+        for (Map.Entry entry : newProps.entrySet()) {
+            sysProps.put("jruby." + entry.getKey(), entry.getValue());
         }
+        // replace system properties
+        System.setProperties(sysProps);
+        return fis;
     }
 
     public static class Status {
@@ -207,7 +225,7 @@ public class Main {
         doShowVersion();
         doShowCopyright();
 
-        if (!config.shouldRunInterpreter() ) {
+        if (!config.getShouldRunInterpreter() ) {
             doPrintUsage(false);
             doPrintProperties();
             return new Status();
@@ -226,10 +244,10 @@ public class Main {
             if (in == null) {
                 // no script to run, return success
                 return new Status();
-            } else if (config.isxFlag() && !config.hasShebangLine()) {
+            } else if (config.isXFlag() && !config.hasShebangLine()) {
                 // no shebang was found and x option is set
                 throw new MainExitException(1, "jruby: no Ruby script found in input (LoadError)");
-            } else if (config.isShouldCheckSyntax()) {
+            } else if (config.getShouldCheckSyntax()) {
                 // check syntax only and exit
                 return doCheckSyntax(runtime, in, filename);
             } else {
@@ -330,43 +348,48 @@ public class Main {
     }
 
     private Status doCheckSyntax(Ruby runtime, InputStream in, String filename) throws RaiseException {
-        int status = 0;
+        // check primary script
+        boolean status = checkStreamSyntax(runtime, in, filename);
+        
+        // check other scripts specified on argv
+        String[] argv = config.getArgv();
+        if (argv.length > 0) {
+            for (String arg : argv) {
+                status = status && checkFileSyntax(runtime, arg);
+            }
+        }
+        
+        return new Status(status ? 0 : -1);
+    }
+    
+    private boolean checkFileSyntax(Ruby runtime, String filename) {
+        File file = new File(filename);
+        if (file.exists()) {
+            try {
+                return checkStreamSyntax(runtime, new FileInputStream(file), filename);
+            } catch (FileNotFoundException fnfe) {
+                config.getError().println("File not found: " + filename);
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    
+    private boolean checkStreamSyntax(Ruby runtime, InputStream in, String filename) {
+        PrintStream error = config.getError();
         try {
             runtime.parseFromMain(in, filename);
-            config.getOutput().println("Syntax OK for " + filename);
+            error.println("Syntax OK for " + filename);
+            return true;
         } catch (RaiseException re) {
-            status = -1;
             if (re.getException().getMetaClass().getBaseName().equals("SyntaxError")) {
-                config.getOutput().println("SyntaxError in " + re.getException().message(runtime.getCurrentContext()));
+                error.println("SyntaxError in " + re.getException().message(runtime.getCurrentContext()));
             } else {
                 throw re;
             }
+            return false;
         }
-        if (config.getArgv().length > 0) {
-            for (String arg : config.getArgv()) {
-                File argFile = new File(arg);
-                if (argFile.exists()) {
-                    try {
-                        runtime.parseFromMain(new FileInputStream(argFile), arg);
-                        config.getOutput().println("Syntax OK for " + arg);
-                    } catch (FileNotFoundException fnfe) {
-                        status = -1;
-                        config.getOutput().println("File not found: " + arg);
-                    } catch (RaiseException re) {
-                        status = -1;
-                        if (re.getException().getMetaClass().getBaseName().equals("SyntaxError")) {
-                            config.getOutput().println("SyntaxError in " + re.getException().message(runtime.getCurrentContext()));
-                        } else {
-                            throw re;
-                        }
-                    }
-                } else {
-                    status = -1;
-                    config.getOutput().println("File not found: " + arg);
-                }
-            }
-        }
-        return new Status(status);
     }
 
     private void doSetContextClassLoader(Ruby runtime) {
@@ -389,26 +412,26 @@ public class Main {
     }
 
     private void doPrintProperties() {
-        if (config.shouldPrintProperties()) {
-            config.getOutput().print(config.getPropertyHelp());
+        if (config.getShouldPrintProperties()) {
+            config.getOutput().print(OutputStrings.getPropertyHelp());
         }
     }
 
     private void doPrintUsage(boolean force) {
-        if (config.shouldPrintUsage() || force) {
-            config.getOutput().print(config.getBasicUsageHelp());
+        if (config.getShouldPrintUsage() || force) {
+            config.getOutput().print(OutputStrings.getBasicUsageHelp());
         }
     }
 
     private void doShowCopyright() {
         if (config.isShowCopyright()) {
-            config.getOutput().println(config.getCopyrightString());
+            config.getOutput().println(OutputStrings.getCopyrightString());
         }
     }
 
     private void doShowVersion() {
         if (config.isShowVersion()) {
-            config.getOutput().println(config.getVersionString());
+            config.getOutput().println(OutputStrings.getVersionString(config.getCompatVersion()));
         }
     }
 
@@ -438,7 +461,7 @@ public class Main {
                 return 0;
             }
         } else {
-            System.err.print(runtime.getInstanceConfig().getTraceType().printBacktrace(raisedException));
+            System.err.print(runtime.getInstanceConfig().getTraceType().printBacktrace(raisedException, runtime.getPosix().isatty(FileDescriptor.err)));
             return 1;
         }
     }

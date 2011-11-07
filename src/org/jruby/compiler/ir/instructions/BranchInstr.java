@@ -5,7 +5,7 @@ import org.jruby.compiler.ir.operands.Label;
 import org.jruby.compiler.ir.operands.Operand;
 
 public abstract class BranchInstr extends TwoOperandInstr {
-    Label target;
+    private Label target;
 
     public BranchInstr(Operation op, Operand v1, Operand v2, Label jmpTarget) {
         super(op, null, v1, v2);
@@ -18,10 +18,13 @@ public abstract class BranchInstr extends TwoOperandInstr {
 
     // Can this instruction raise exceptions?
     @Override
-    public boolean canRaiseException() { return false; }
+    public boolean canRaiseException() {
+        return false;
+    }
 
     @Override
     public String toString() {
-        return "" + operation + "(" + operand1 + ", " + operand2 + ", " + target + ")";
+        return "" + getOperation() + "(" + getOperand1() + ", " + getOperand2()
+                + ", " + target + ")";
     }
 }

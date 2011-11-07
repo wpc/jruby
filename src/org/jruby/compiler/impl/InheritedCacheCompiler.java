@@ -44,6 +44,7 @@ import org.jruby.ast.NodeType;
 import org.jruby.ast.executable.AbstractScript;
 import org.jruby.ast.executable.RuntimeCache;
 import org.jruby.compiler.ASTInspector;
+import org.jruby.compiler.ArrayCallback;
 import org.jruby.compiler.CacheCompiler;
 import org.jruby.compiler.CompilerCallback;
 import org.jruby.internal.runtime.methods.DynamicMethod;
@@ -209,6 +210,31 @@ public class InheritedCacheCompiler implements CacheCompiler {
 
         method.method.label(alreadyCompiled);
     }
+
+    public void cacheDRegexp19(BaseBodyCompiler method, ArrayCallback arrayCallback, Object[] sourceArray, int options) {
+        int index = inheritedRegexpCount++;
+        Label alreadyCompiled = new Label();
+
+        method.loadThis();
+        method.method.getfield(scriptCompiler.getClassname(), "runtimeCache", ci(RuntimeCache.class));
+        method.method.pushInt(index);
+        method.method.invokevirtual(p(RuntimeCache.class), "getRegexp", sig(RubyRegexp.class, int.class));
+        method.method.dup();
+
+        method.ifNotNull(alreadyCompiled);
+
+        method.method.pop();
+        method.loadThis();
+        method.method.getfield(scriptCompiler.getClassname(), "runtimeCache", ci(RuntimeCache.class));
+        method.method.pushInt(index);
+        method.loadRuntime();
+        method.createObjectArray(sourceArray, arrayCallback);
+        method.method.ldc(options);
+        method.method.invokestatic(p(RubyRegexp.class), "newDRegexpEmbedded19", sig(RubyRegexp.class, params(Ruby.class, IRubyObject[].class, int.class))); //[reg]
+        method.method.invokevirtual(p(RuntimeCache.class), "cacheRegexp", sig(RubyRegexp.class, int.class, RubyRegexp.class));
+
+        method.method.label(alreadyCompiled);
+    }
     
     public void cacheFixnum(BaseBodyCompiler method, long value) {
         if (value <= 5 && value >= -1) {
@@ -318,7 +344,7 @@ public class InheritedCacheCompiler implements CacheCompiler {
         if (index == null) {
             index = Integer.valueOf(inheritedStringCount++);
             stringIndices.put(asString, index);
-            stringEncodings.put(asString, cacheEncoding(contents.getEncoding()));
+            stringEncodings.put(asString, cacheEncodingInternal(contents.getEncoding()));
         }
 
         method.loadThis();
@@ -340,7 +366,7 @@ public class InheritedCacheCompiler implements CacheCompiler {
         if (index == null) {
             index = Integer.valueOf(inheritedStringCount++);
             stringIndices.put(asString, index);
-            stringEncodings.put(asString, cacheEncoding(contents.getEncoding()));
+            stringEncodings.put(asString, cacheEncodingInternal(contents.getEncoding()));
         }
 
         method.loadThis();
@@ -352,14 +378,19 @@ public class InheritedCacheCompiler implements CacheCompiler {
         }
     }
 
-    public void cacheEncoding(BaseBodyCompiler method, Encoding encoding) {
+    public void cacheRubyEncoding(BaseBodyCompiler method, Encoding encoding) {
         // split into three methods since ByteList depends on two parts in different places
-        int encodingIndex = cacheEncoding(encoding);
-        loadEncoding(method.method, encodingIndex);
+        cacheEncoding(method, encoding);
         createRubyEncoding(method);
     }
+    
+    public int cacheEncoding(BaseBodyCompiler method, Encoding encoding) {
+        int index = cacheEncodingInternal(encoding);
+        loadEncoding(method.method, index);
+        return index;
+    }
 
-    private int cacheEncoding(Encoding encoding) {
+    private int cacheEncodingInternal(Encoding encoding) {
         String encodingName = new String(encoding.getName());
 
         Integer index = encodingIndices.get(encodingName);

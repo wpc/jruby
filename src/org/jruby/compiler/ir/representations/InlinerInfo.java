@@ -54,7 +54,7 @@ public class InlinerInfo {
                 // Frame load/store placement dataflow pass (and possible other passes later on) exploit
                 // information whether a variable is a temporary or a local/self variable.
                 // So, variable renaming for inlining has to preserve this information.
-                newVar = m.getLocalVariable(newVar.getName());
+                newVar = m.getLocalVariable(newVar.getName(), ((LocalVariable)newVar).getScopeDepth());
             }
             this.varRenameMap.put(v, newVar);
         }
@@ -68,7 +68,7 @@ public class InlinerInfo {
     public BasicBlock getOrCreateRenamedBB(BasicBlock bb) {
         BasicBlock renamedBB = getRenamedBB(bb);
         if (renamedBB == null) {
-            renamedBB =  new BasicBlock(this.callerCFG, getRenamedLabel(bb._label));
+            renamedBB =  new BasicBlock(this.callerCFG, getRenamedLabel(bb.getLabel()));
             bbRenameMap.put(bb, renamedBB);
         }
         return renamedBB;
@@ -107,7 +107,7 @@ public class InlinerInfo {
     }
 
     public Variable getCallResultVariable() {
-        return call.result;
+        return call.getResult();
     }
 
     public void recordYieldSite(BasicBlock bb, YieldInstr i) {

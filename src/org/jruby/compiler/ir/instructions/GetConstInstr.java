@@ -29,18 +29,8 @@ public class GetConstInstr extends GetInstr {
         super(Operation.GET_CONST, dest, scopeOrObj, constName);
     }
 
-    @Override
-    public Operand simplifyAndGetResult(Map<Operand, Operand> valueMap) {
-        simplifyOperands(valueMap);
-        if (!(getSource() instanceof MetaObject)) return null;
-
-        // SSS FIXME: Isn't this always going to be an IR Module?
-        IRScope s = ((MetaObject) getSource()).scope;
-        return (s instanceof IRModule) ? ((IRModule)s).getConstantValue(getName()) : null;
-    }
-
     public Instr cloneForInlining(InlinerInfo ii) {
-        return new SearchConstInstr(ii.getRenamedVariable(result), getSource().cloneForInlining(ii), getName());
+        return new GetConstInstr(ii.getRenamedVariable(getResult()), getSource().cloneForInlining(ii), getRef());
     }
 
     @Override
@@ -57,11 +47,11 @@ public class GetConstInstr extends GetInstr {
         } else if (source instanceof RubyModule) {
             module = (RubyModule) source;
         } else {
-            throw context.getRuntime().newNameError(source + " is not a type/class", ((IRubyObject)source).asJavaString());
+            throw context.getRuntime().newTypeError(source + " is not a type/class");
         }
 
-        Object constant = module.getConstant(getName());
-        if (constant == null) constant = module.getConstantFromConstMissing(getName());
+        Object constant = module.getConstant(getRef());
+        if (constant == null) constant = module.getConstantFromConstMissing(getRef());
 
         //if (container == null) throw runtime.newNameError("unitialized constant " + scope.getName(), scope.getName());
         getResult().store(interp, context, self, constant);

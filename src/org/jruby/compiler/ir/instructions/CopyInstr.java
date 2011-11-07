@@ -29,7 +29,7 @@ public class CopyInstr extends OneOperandInstr {
 
     @Override
     public Instr cloneForInlining(InlinerInfo ii) {
-        return new CopyInstr(ii.getRenamedVariable(result), argument.cloneForInlining(ii));
+        return new CopyInstr(ii.getRenamedVariable(getResult()), argument.cloneForInlining(ii));
     }
 
     @Override
@@ -45,5 +45,7 @@ public class CopyInstr extends OneOperandInstr {
 
     // Can this instruction raise exceptions?
     @Override
-    public boolean canRaiseException() { return false; }
+    public boolean canRaiseException() {
+        return false;
+    }
 }

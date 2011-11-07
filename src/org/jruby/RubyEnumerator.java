@@ -72,10 +72,6 @@ public class RubyEnumerator extends RubyObject {
         runtime.setEnumerator(enmr);
 
         RubyYielder.createYielderClass(runtime);
-        
-        if (runtime.is1_9()) {
-            runtime.getLoadService().require("generator_internal");
-        }
     }
 
     private static ObjectAllocator ENUMERATOR_ALLOCATOR = new ObjectAllocator() {
@@ -95,15 +91,15 @@ public class RubyEnumerator extends RubyObject {
         initialize(object, method, args);
     }
 
-    static IRubyObject enumeratorize(Ruby runtime, IRubyObject object, String method) {
+    public static IRubyObject enumeratorize(Ruby runtime, IRubyObject object, String method) {
         return new RubyEnumerator(runtime, object, runtime.fastNewSymbol(method), IRubyObject.NULL_ARRAY);
     }
 
-    static IRubyObject enumeratorize(Ruby runtime, IRubyObject object, String method, IRubyObject arg) {
+    public static IRubyObject enumeratorize(Ruby runtime, IRubyObject object, String method, IRubyObject arg) {
         return new RubyEnumerator(runtime, object, runtime.fastNewSymbol(method), new IRubyObject[]{arg});
     }
 
-    static IRubyObject enumeratorize(Ruby runtime, IRubyObject object, String method, IRubyObject[]args) {
+    public static IRubyObject enumeratorize(Ruby runtime, IRubyObject object, String method, IRubyObject[]args) {
         return new RubyEnumerator(runtime, object, runtime.fastNewSymbol(method), args); // TODO: make sure it's really safe to not to copy it
     }
 
@@ -152,8 +148,14 @@ public class RubyEnumerator extends RubyObject {
         return initialize(object, method, new IRubyObject[] { methodArg });
     }
 
-    @JRubyMethod(name = "initialize", required = 3, rest = true, visibility = PRIVATE, compat = RUBY1_8)
+    @JRubyMethod(name = "initialize", rest = true, visibility = PRIVATE, compat = RUBY1_8)
     public IRubyObject initialize(ThreadContext context, IRubyObject[] args) {
+        switch (args.length) {
+            case 0: return initialize(context);
+            case 1: return initialize(context, args[0]);
+            case 2: return initialize(context, args[0], args[1]);
+        }
+
         IRubyObject[] methArgs = new IRubyObject[args.length - 2];
         System.arraycopy(args, 2, methArgs, 0, methArgs.length);
         return initialize(args[0], args[1], methArgs);
@@ -407,23 +409,5 @@ public class RubyEnumerator extends RubyObject {
     @JRubyMethod(name = "with_index", compat = RUBY1_9)
     public static IRubyObject with_index19(ThreadContext context, IRubyObject self, IRubyObject arg, final Block block) {
         return with_index_common(context, self, block, "with_index", arg);
-    }
-
-    @JRubyMethod
-    public static IRubyObject next(ThreadContext context, IRubyObject self) {
-        context.getRuntime().getLoadService().require("generator_internal");
-        return self.callMethod(context, "next");
-    }
-
-    @JRubyMethod
-    public static IRubyObject rewind(ThreadContext context, IRubyObject self) {
-        context.getRuntime().getLoadService().require("generator_internal");
-        return self.callMethod(context, "rewind");
-    }
-
-    @JRubyMethod(compat = RUBY1_9)
-    public static IRubyObject peek(ThreadContext context, IRubyObject self) {
-        context.getRuntime().getLoadService().require("generator_internal");
-        return self.callMethod(context, "peek");
     }
 }

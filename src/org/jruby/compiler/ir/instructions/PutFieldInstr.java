@@ -22,10 +22,11 @@ public class PutFieldInstr extends PutInstr {
     public Label interpret(InterpreterContext interp, ThreadContext context, IRubyObject self) {
         IRubyObject object = (IRubyObject) getTarget().retrieve(interp, context, self);
 
+        // FIXME: Why getRealClass? Document
         RubyClass clazz = object.getMetaClass().getRealClass();
 
         // FIXME: Should add this as a field for instruction
-        clazz.getVariableAccessorForWrite(getName()).set(object, 
+        clazz.getVariableAccessorForWrite(getRef()).set(object, 
                 getValue().retrieve(interp, context, self));
         return null;
     }

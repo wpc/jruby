@@ -56,6 +56,8 @@ import org.jruby.runtime.Binding;
 import org.jruby.runtime.Frame;
 import org.jruby.runtime.InterpretedBlock;
 import org.jruby.util.ByteList;
+import org.jruby.RubyInstanceConfig.CompileMode;
+import org.jruby.interpreter.Interpreter;
 
 public class ASTInterpreter {
     public static IRubyObject INTERPRET_METHOD(
@@ -147,8 +149,10 @@ public class ASTInterpreter {
      */
     public static IRubyObject evalWithBinding(ThreadContext context, IRubyObject self, IRubyObject src, Binding binding) {
         Ruby runtime = src.getRuntime();
-        DynamicScope evalScope = binding.getDynamicScope().getEvalScope();
-        
+        DynamicScope evalScope = binding.getDynamicScope().getEvalScope(runtime);
+        String savedFile = context.getFile();
+        int savedLine = context.getLine();
+
         // FIXME:  This determine module is in a strange location and should somehow be in block
         evalScope.getStaticScope().determineModule();
 
@@ -157,8 +161,15 @@ public class ASTInterpreter {
             // Binding provided for scope, use it
             RubyString source = src.convertToString();
             Node node = runtime.parseEval(source.getByteList(), binding.getFile(), evalScope, binding.getLine());
+            Block block = binding.getFrame().getBlock();
 
-            return INTERPRET_EVAL(runtime, context, binding.getFile(), binding.getLine(), node, binding.getMethod(), self, binding.getFrame().getBlock());
+            if (runtime.getInstanceConfig().getCompileMode() == CompileMode.OFFIR) {
+                // SSS FIXME: AST interpreter passed both a runtime (which comes from the source string)
+                // and the thread-context rather than fetch one from the other.  Why is that?
+                return Interpreter.interpretBindingEval(runtime, binding.getFile(), binding.getLine(), node, self, block);
+            } else {
+                return INTERPRET_EVAL(runtime, context, binding.getFile(), binding.getLine(), node, binding.getMethod(), self, block);
+            }
         } catch (JumpException.BreakJump bj) {
             throw runtime.newLocalJumpError(RubyLocalJumpError.Reason.BREAK, (IRubyObject)bj.getValue(), "unexpected break");
         } catch (JumpException.RedoJump rj) {
@@ -166,6 +177,8 @@ public class ASTInterpreter {
         } catch (StackOverflowError soe) {
             throw runtime.newSystemStackError("stack level too deep", soe);
         } finally {
+            context.setFile(savedFile);
+            context.setLine(savedLine);
             context.postEvalWithBinding(binding, lastFrame);
         }
     }
@@ -189,13 +202,19 @@ public class ASTInterpreter {
         // no binding, just eval in "current" frame (caller's frame)
         RubyString source = src.convertToString();
         
-        DynamicScope evalScope = context.getCurrentScope().getEvalScope();
+        DynamicScope evalScope = context.getCurrentScope().getEvalScope(runtime);
         evalScope.getStaticScope().determineModule();
         
         try {
             Node node = runtime.parseEval(source.getByteList(), file, evalScope, lineNumber);
 
-            return INTERPRET_EVAL(runtime, context, file, lineNumber, node, "(eval)", self, Block.NULL_BLOCK);
+            if (runtime.getInstanceConfig().getCompileMode() == CompileMode.OFFIR) {
+                // SSS FIXME: AST interpreter passed both a runtime (which comes from the source string)
+                // and the thread-context rather than fetch one from the other.  Why is that?
+                return Interpreter.interpretSimpleEval(runtime, file, lineNumber, node, self);
+            } else {
+                return INTERPRET_EVAL(runtime, context, file, lineNumber, node, "(eval)", self, Block.NULL_BLOCK);
+            }
         } catch (JumpException.BreakJump bj) {
             throw runtime.newLocalJumpError(RubyLocalJumpError.Reason.BREAK, (IRubyObject)bj.getValue(), "unexpected break");
         } catch (StackOverflowError soe) {

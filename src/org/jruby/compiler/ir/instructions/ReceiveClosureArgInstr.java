@@ -14,8 +14,8 @@ import org.jruby.runtime.builtin.IRubyObject;
 //   Ex:  .. { |a| .. }
 // The closure receives 'a' via this instruction
 public class ReceiveClosureArgInstr extends NoOperandInstr {
-    public final int     argIndex;
-    public final boolean restOfArgArray;
+    private final int argIndex;
+    boolean restOfArgArray;
 
     public ReceiveClosureArgInstr(Variable dest, int argIndex, boolean restOfArgArray) {
         super(Operation.RECV_CLOSURE_ARG, dest);
@@ -23,10 +23,18 @@ public class ReceiveClosureArgInstr extends NoOperandInstr {
         this.argIndex = argIndex;
         this.restOfArgArray = restOfArgArray;
     }
+    
+    public boolean isRestOfArgArray() {
+        return restOfArgArray;
+    }
 
     @Override
     public String toString() {
         return super.toString() + "(" + argIndex + (restOfArgArray ? ", ALL" : "") + ")";
+    }
+    
+    public int getArgIndex() {
+        return argIndex;
     }
 
     public Instr cloneForInlining(InlinerInfo ii) {
@@ -51,11 +59,7 @@ public class ReceiveClosureArgInstr extends NoOperandInstr {
                 o = RubyArray.newArray(context.getRuntime(), restOfArgs);
             }
         } else {
-            if (numArgs <= argIndex) {
-                o = context.getRuntime().getNil();
-            } else {
-                o = interp.getParameter(argIndex);
-            }
+            o = (argIndex < numArgs) ? interp.getParameter(argIndex) : context.getRuntime().getNil();
         }
         getResult().store(interp, context, self, o);
         return null;

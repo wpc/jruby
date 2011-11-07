@@ -15,8 +15,8 @@ import org.jruby.runtime.builtin.IRubyObject;
  */
 public class ReceiveArgumentInstruction extends NoOperandInstr {
 	 // SSS FIXME: Fix IR to start offsets from 0
-    int argIndex;
-    boolean restOfArgArray; // If true, the argument sub-array starting at this index is passed in via this instruction.
+    protected int argIndex;
+    protected boolean restOfArgArray; // If true, the argument sub-array starting at this index is passed in via this instruction.
 
     public ReceiveArgumentInstruction(Variable destination, int argIndex,
             boolean restOfArgArray) {
@@ -35,7 +35,7 @@ public class ReceiveArgumentInstruction extends NoOperandInstr {
     }
 
     public Instr cloneForInlining(InlinerInfo ii) {
-        return new CopyInstr(ii.getRenamedVariable(result), ii.getCallArg(argIndex, restOfArgArray));
+        return new CopyInstr(ii.getRenamedVariable(getResult()), ii.getCallArg(argIndex, restOfArgArray));
     }
 
     @Override

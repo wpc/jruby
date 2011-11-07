@@ -93,6 +93,11 @@ namespace :spec do
     mspec :compile_mode => "OFF", :spec_config => RUBY18_MSPEC_FILE
   end
 
+  desc "Tagged 1.8 specs in interpreted (IR) mode only"
+  task :interpreted_ir_18 do
+    mspec :compile_mode => "OFFIR", :spec_config => RUBY18_MSPEC_FILE
+  end
+
   desc "Tagged 1.8 specs in JIT mode only (threshold=0)"
   task :compiled_18 do
     mspec :compile_mode => "JIT", :spec_config => RUBY18_MSPEC_FILE, 
@@ -181,6 +186,12 @@ namespace :spec do
     RSpec::Core::RakeTask.new("compiler#{version_suffix}" => "test:compile") do |t|
       t.ruby_opts = version_arg
       t.pattern = 'spec/compiler/**/*_spec.rb'
+    end
+
+    desc "Runs Profiler Specs"
+    RSpec::Core::RakeTask.new("profiler#{version_suffix}" => "test:compile") do |t|
+      t.ruby_opts = "--profile #{version_arg}"
+      t.pattern = 'spec/profiler/**/*_spec.rb'
     end
 
     desc "Runs FFI specs"

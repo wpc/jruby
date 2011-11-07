@@ -368,6 +368,10 @@ public abstract class StaticScope implements Serializable {
     public abstract boolean isArgumentScope();
     public abstract void makeArgumentScope();
 
+    public boolean isBlockScope() {
+        return false;
+    }
+
     public boolean isBackrefLastlineScope() {
         return isBackrefLastlineScope;
     }

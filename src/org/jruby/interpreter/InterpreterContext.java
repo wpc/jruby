@@ -8,6 +8,7 @@ import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.RubyException;
 
+import org.jruby.compiler.ir.IRExecutionScope;
 import org.jruby.compiler.ir.IRMethod;
 import org.jruby.compiler.ir.operands.Label;
 
@@ -41,13 +42,9 @@ public interface InterpreterContext {
 
     public Object getTemporaryVariable(int offset);
     public Object setTemporaryVariable(int offset, Object value);
-    public Object getLocalVariable(ThreadContext context, int offset);
-    public Object setLocalVariable(int offset, Object value);
+    public Object getLocalVariable(ThreadContext context, int depth, int offset);
+    public Object setLocalVariable(int depth, int offset, Object value);
 
-    public void setDynamicScope(DynamicScope s);
-    public void allocateSharedBindingScope(ThreadContext context, IRMethod method);
-    public DynamicScope getSharedBindingScope();
-    public boolean hasAllocatedDynamicScope();
     public Object getSharedBindingVariable(ThreadContext context, int bindingSlot);
     public void setSharedBindingVariable(int bindingSlot, Object value);
 
@@ -58,9 +55,7 @@ public interface InterpreterContext {
     public void setFrame(Frame currentFrame);
     public Frame getFrame();
 
-    public void setMethodExitLabel(Label l);
-
-    public Label getMethodExitLabel();
+    public IRExecutionScope getCurrentIRScope();
 
     // Set the most recently raised exception
     public void setException(Object e);

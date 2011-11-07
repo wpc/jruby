@@ -25,21 +25,22 @@ public class IsTrueInstr extends OneOperandInstr {
     @Override
     public Operand simplifyAndGetResult(Map<Operand, Operand> valueMap) {
         simplifyOperands(valueMap);
-        if (argument.isConstant()) {
-            return (argument == Nil.NIL || argument == BooleanLiteral.FALSE) ? BooleanLiteral.FALSE : BooleanLiteral.TRUE;
-        } else {
-            return null;
-        }
+        if (!argument.isConstant()) return null;
+
+        return argument == Nil.NIL || argument == BooleanLiteral.FALSE ?
+                    BooleanLiteral.FALSE : BooleanLiteral.TRUE;
     }
 
     @Override
     public Instr cloneForInlining(InlinerInfo ii) {
-        return new IsTrueInstr(ii.getRenamedVariable(result), argument.cloneForInlining(ii));
+        return new IsTrueInstr(ii.getRenamedVariable(getResult()), argument.cloneForInlining(ii));
     }
 
     // Can this instruction raise exceptions?
     @Override
-    public boolean canRaiseException() { return false; }
+    public boolean canRaiseException() {
+        return false;
+    }
 
     @Override
     public Label interpret(InterpreterContext interp, ThreadContext context, IRubyObject self) {

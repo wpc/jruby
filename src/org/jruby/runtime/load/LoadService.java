@@ -11,14 +11,14 @@
  * implied. See the License for the specific language governing
  * rights and limitations under the License.
  *
- * Copyright (C) 2002-2010 JRuby Community
+ * Copyright (C) 2002-2011 JRuby Community
  * Copyright (C) 2002-2004 Anders Bengtsson <ndrsbngtssn@yahoo.se>
  * Copyright (C) 2002-2004 Jan Arne Petersen <jpetersen@uni-bonn.de>
  * Copyright (C) 2004 Thomas E Enebo <enebo@acm.org>
  * Copyright (C) 2004-2005 Charles O Nutter <headius@headius.com>
  * Copyright (C) 2004 Stefan Matthias Aust <sma@3plus4.de>
  * Copyright (C) 2006 Ola Bini <ola@ologix.com>
- * 
+ *
  * Alternatively, the contents of this file may be used under the terms of
  * either of the GNU General Public License Version 2 or later (the "GPL"),
  * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
@@ -35,6 +35,7 @@ package org.jruby.runtime.load;
 
 import org.jruby.util.collections.StringArraySet;
 import java.io.File;
+import java.io.FileDescriptor;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.MalformedURLException;
@@ -71,77 +72,115 @@ import org.jruby.util.log.LoggerFactory;
 import static org.jruby.util.URLUtil.getPath;
 
 /**
- * <b>How require works in JRuby</b>
- * When requiring a name from Ruby, JRuby will first remove any file extension it knows about,
- * thereby making it possible to use this string to see if JRuby has already loaded
- * the name in question. If a .rb extension is specified, JRuby will only try
- * those extensions when searching. If a .so, .o, .dll, or .jar extension is specified, JRuby
- * will only try .so or .jar when searching. Otherwise, JRuby goes through the known suffixes
- * (.rb, .rb.ast.ser, .so, and .jar) and tries to find a library with this name. The process for finding a library follows this order
- * for all searchable extensions:
+ * <h2>How require works in JRuby</h2>
+ *
+ * When requiring a name from Ruby, JRuby will first remove any file
+ * extension it knows about, thereby making it possible to use this string
+ * to see if JRuby has already loaded the name in question. If a .rb
+ * extension is specified, JRuby will only try those extensions when
+ * searching. If a .so, .o, .dll, or .jar extension is specified, JRuby will
+ * only try .so or .jar when searching. Otherwise, JRuby goes through the
+ * known suffixes (.rb, .rb.ast.ser, .so, and .jar) and tries to find a
+ * library with this name. The process for finding a library follows this
+ * order for all searchable extensions:
+ *
  * <ol>
- * <li>First, check if the name starts with 'jar:', then the path points to a jar-file resource which is returned.</li>
+ * <li>First, check if the name starts with 'jar:', then the path points to
+ * a jar-file resource which is returned.</li>
  * <li>Second, try searching for the file in the current dir</li>
  * <li>Then JRuby looks through the load path trying these variants:
  *   <ol>
- *     <li>See if the current load path entry starts with 'jar:', if so check if this jar-file contains the name</li>
- *     <li>Otherwise JRuby tries to construct a path by combining the entry and the current working directy, and then see if 
- *         a file with the correct name can be reached from this point.</li>
+ *     <li>See if the current load path entry starts with 'jar:', if so
+ *     check if this jar-file contains the name</li>
+ *     <li>Otherwise JRuby tries to construct a path by combining the entry
+ *     and the current working directy, and then see if a file with the
+ *     correct name can be reached from this point.</li>
  *   </ol>
  * </li>
- * <li>If all these fail, try to load the name as a resource from classloader resources, using the bare name as
- *     well as the load path entries</li>
- * <li>When we get to this state, the normal JRuby loading has failed. At this stage JRuby tries to load 
- *     Java native extensions, by following this process:
+ * <li>If all these fail, try to load the name as a resource from
+ * classloader resources, using the bare name as well as the load path
+ * entries</li>
+ * <li>When we get to this state, the normal JRuby loading has failed. At
+ * this stage JRuby tries to load Java native extensions, by following this
+ * process:
  *   <ol>
- *     <li>First it checks that we haven't already found a library. If we found a library of type JarredScript, the method continues.</li>
- *     <li>The first step is translating the name given into a valid Java Extension class name. First it splits the string into 
- *     each path segment, and then makes all but the last downcased. After this it takes the last entry, removes all underscores
- *     and capitalizes each part separated by underscores. It then joins everything together and tacks on a 'Service' at the end.
- *     Lastly, it removes all leading dots, to make it a valid Java FWCN.</li>
- *     <li>If the previous library was of type JarredScript, we try to add the jar-file to the classpath</li>
- *     <li>Now JRuby tries to instantiate the class with the name constructed. If this works, we return a ClassExtensionLibrary. Otherwise,
- *     the old library is put back in place, if there was one.
+ *     <li>First it checks that we haven't already found a library. If we
+ *     found a library of type JarredScript, the method continues.</li>
+ *
+ *     <li>The first step is translating the name given into a valid Java
+ *     Extension class name. First it splits the string into each path
+ *     segment, and then makes all but the last downcased. After this it
+ *     takes the last entry, removes all underscores and capitalizes each
+ *     part separated by underscores. It then joins everything together and
+ *     tacks on a 'Service' at the end. Lastly, it removes all leading dots,
+ *     to make it a valid Java FWCN.</li>
+ *
+ *     <li>If the previous library was of type JarredScript, we try to add
+ *     the jar-file to the classpath</li>
+ *
+ *     <li>Now JRuby tries to instantiate the class with the name
+ *     constructed. If this works, we return a ClassExtensionLibrary.
+ *     Otherwise, the old library is put back in place, if there was one.
  *   </ol>
  * </li>
- * <li>When all separate methods have been tried and there was no result, a LoadError will be raised.</li>
- * <li>Otherwise, the name will be added to the loaded features, and the library loaded</li>
+ * <li>When all separate methods have been tried and there was no result, a
+ * LoadError will be raised.</li>
+ * <li>Otherwise, the name will be added to the loaded features, and the
+ * library loaded</li>
  * </ol>
  *
- * <b>How to make a class that can get required by JRuby</b>
- * <p>First, decide on what name should be used to require the extension.
- * In this purely hypothetical example, this name will be 'active_record/connection_adapters/jdbc_adapter'.
- * Then create the class name for this require-name, by looking at the guidelines above. Our class should
- * be named active_record.connection_adapters.JdbcAdapterService, and implement one of the library-interfaces.
- * The easiest one is BasicLibraryService, where you define the basicLoad-method, which will get called
- * when your library should be loaded.</p>
- * <p>The next step is to either put your compiled class on JRuby's classpath, or package the class/es inside a
- * jar-file. To package into a jar-file, we first create the file, then rename it to jdbc_adapter.jar. Then 
- * we put this jar-file in the directory active_record/connection_adapters somewhere in JRuby's load path. For
- * example, copying jdbc_adapter.jar into JRUBY_HOME/lib/ruby/site_ruby/1.8/active_record/connection_adapters
- * will make everything work. If you've packaged your extension inside a RubyGem, write a setub.rb-script that 
- * copies the jar-file to this place.</p>
- * <p>If you don't want to have the name of your extension-class to be prescribed, you can also put a file called
- * jruby-ext.properties in your jar-files META-INF directory, where you can use the key <full-extension-name>.impl
- * to make the extension library load the correct class. An example for the above would have a jruby-ext.properties
- * that contained a ruby like: "active_record/connection_adapters/jdbc_adapter=org.jruby.ar.JdbcAdapter". (NOTE: THIS
- * FEATURE IS NOT IMPLEMENTED YET.)</p>
+ * <h2>How to make a class that can get required by JRuby</h2>
+ *
+ * <p>First, decide on what name should be used to require the extension. In
+ * this purely hypothetical example, this name will be
+ * 'active_record/connection_adapters/jdbc_adapter'. Then create the class
+ * name for this require-name, by looking at the guidelines above. Our class
+ * should be named active_record.connection_adapters.JdbcAdapterService, and
+ * implement one of the library-interfaces. The easiest one is
+ * BasicLibraryService, where you define the basicLoad-method, which will
+ * get called when your library should be loaded.</p>
+ *
+ * <p>The next step is to either put your compiled class on JRuby's
+ * classpath, or package the class/es inside a jar-file. To package into a
+ * jar-file, we first create the file, then rename it to jdbc_adapter.jar.
+ * Then we put this jar-file in the directory
+ * active_record/connection_adapters somewhere in JRuby's load path. For
+ * example, copying jdbc_adapter.jar into
+ * JRUBY_HOME/lib/ruby/site_ruby/1.8/active_record/connection_adapters will
+ * make everything work. If you've packaged your extension inside a RubyGem,
+ * write a setub.rb-script that copies the jar-file to this place.</p>
  *
  * @author jpetersen
  */
 public class LoadService {
     private static final Logger LOG = LoggerFactory.getLogger("LoadService");
-    
+
     private final LoadTimer loadTimer;
 
     public enum SuffixType {
         Source, Extension, Both, Neither;
-        
-        public static final String[] sourceSuffixes = { ".class", ".rb" };
-        public static final String[] extensionSuffixes = { ".jar", ".so", ".bundle", ".dll" };
-        private static final String[] allSuffixes = { ".class", ".rb", ".jar", ".so", ".bundle", ".dll" };
+
         private static final String[] emptySuffixes = { "" };
-        
+        // NOTE: always search .rb first for speed
+        public static final String[] sourceSuffixes = { ".rb", ".class" };
+        public static final String[] extensionSuffixes;
+        private static final String[] allSuffixes;
+
+        static {                // compute based on platform
+            extensionSuffixes = new String[2];
+            extensionSuffixes[0] = ".jar";
+            if (Platform.IS_WINDOWS) {
+                extensionSuffixes[1] = ".dll";
+            } else if (Platform.IS_MAC) { // TODO: BSD also?
+                extensionSuffixes[1] = ".bundle";
+            } else {
+                extensionSuffixes[1] = ".so";
+            }
+            allSuffixes = new String[sourceSuffixes.length + extensionSuffixes.length];
+            System.arraycopy(sourceSuffixes, 0, allSuffixes, 0, sourceSuffixes.length);
+            System.arraycopy(extensionSuffixes, 0, allSuffixes, sourceSuffixes.length, extensionSuffixes.length);
+        }
+
         public String[] getSuffixes() {
             switch (this) {
             case Source:
@@ -166,7 +205,7 @@ public class LoadService {
     protected final Map<String, JarFile> jarFiles = new HashMap<String, JarFile>();
 
     protected final Ruby runtime;
-    
+
     public LoadService(Ruby runtime) {
         this.runtime = runtime;
         if (RubyInstanceConfig.DEBUG_LOAD_TIMINGS) {
@@ -178,10 +217,10 @@ public class LoadService {
 
     public void init(List additionalDirectories) {
         loadPath = RubyArray.newArray(runtime);
-        
+
         String jrubyHome = runtime.getJRubyHome();
         loadedFeatures = new StringArraySet(runtime);
-        
+
         // add all startup load paths to the list first
         for (Iterator iter = additionalDirectories.iterator(); iter.hasNext();) {
             addPath((String) iter.next());
@@ -219,7 +258,7 @@ public class LoadService {
             }
 
         } catch(SecurityException ignore) {}
-        
+
         // "." dir is used for relative path loads from a given file, as in require '../foo/bar'
         if (!runtime.is1_9() && runtime.getSafeLevel() == 0) {
             addPath(".");
@@ -233,7 +272,7 @@ public class LoadService {
     protected void addPath(String path) {
         // Empty paths do not need to be added
         if (path == null || path.length() == 0) return;
-        
+
         synchronized(loadPath) {
             loadPath.append(runtime.newString(path.replace('\\', '/')));
         }
@@ -246,7 +285,7 @@ public class LoadService {
 
         SearchState state = new SearchState(file);
         state.prepareLoadSearch(file);
-        
+
         Library library = findBuiltinLibrary(state, state.searchFile, state.suffixType);
         if (library == null) library = findLibraryWithoutCWD(state, state.searchFile, state.suffixType);
 
@@ -274,7 +313,7 @@ public class LoadService {
         if (file.endsWith(".so")) {
             file = file.replaceAll(".so$", ".jar");
         }
-        
+
         SearchState state = new SearchState(file);
         state.prepareRequireSearch(file);
 
@@ -292,15 +331,15 @@ public class LoadService {
     public boolean require(String requireName) {
         return requireCommon(requireName, true) == RequireState.LOADED;
     }
-    
+
     public boolean autoloadRequire(String requireName) {
         return requireCommon(requireName, false) != RequireState.CIRCULAR;
     }
-    
+
     private enum RequireState {
         LOADED, ALREADY_LOADED, CIRCULAR
     };
-    
+
     private RequireState requireCommon(String requireName, boolean circularRequireWarning) {
         ReentrantLock requireLock = null;
         try {
@@ -364,7 +403,7 @@ public class LoadService {
         // it's a hack for c:rb_backtrace impl.
         // We should introduce new method to Ruby.TraceType when rb_backtrace is widely used not only for this purpose.
         RaiseException ex = new RaiseException(runtime, runtime.getRuntimeError(), null, false);
-        String trace = runtime.getInstanceConfig().getTraceType().printBacktrace(ex.getException());
+        String trace = runtime.getInstanceConfig().getTraceType().printBacktrace(ex.getException(), runtime.getPosix().isatty(FileDescriptor.err));
         // rb_backtrace dumps to stderr directly.
         System.err.print(trace.replaceFirst("[^\n]*\n", ""));
     }
@@ -377,7 +416,7 @@ public class LoadService {
     public boolean smartLoad(String file) {
         return require(file);
     }
-    
+
     protected Map<String, ReentrantLock> requireLocks = new HashMap<String, ReentrantLock>();
 
     private boolean smartLoadInternal(String file) {
@@ -389,7 +428,7 @@ public class LoadService {
         if (state.library == null) {
             throw runtime.newLoadError("no such file to load -- " + state.searchFile);
         }
-       
+
         // check with long name
         if (featureAlreadyLoaded(state.loadName)) {
             return false;
@@ -436,7 +475,7 @@ public class LoadService {
      * className. The purpose of using this method is to avoid having static
      * references to the given library class, thereby avoiding the additional
      * classloading when the library is not in use.
-     * 
+     *
      * @param runtime The runtime in which to load
      * @param libraryName The name of the library, to use for error messages
      * @param className The class of the library
@@ -502,14 +541,14 @@ public class LoadService {
             throw (RaiseException) e;
         }
     }
-    
+
     public interface LoadSearcher {
         /**
          * @param state
          * @return true if trySearch should be called.
          */
         public boolean shouldTrySearch(SearchState state);
-        
+
         /**
          * @param state
          * @return false if loadSearch must be bail-out.
@@ -557,7 +596,7 @@ public class LoadService {
         public boolean shouldTrySearch(SearchState state) {
             return state.library == null;
         }
-        
+
         public boolean trySearch(SearchState state) {
             state.library = findLibraryWithoutCWD(state, state.searchFile, state.suffixType);
             return true;
@@ -568,7 +607,7 @@ public class LoadService {
         public boolean shouldTrySearch(SearchState state) {
             return state.library == null;
         }
-        
+
         public boolean trySearch(SearchState state) {
             state.library = findLibraryWithClassloaders(state, state.searchFile, state.suffixType);
             return true;
@@ -579,7 +618,7 @@ public class LoadService {
         public boolean shouldTrySearch(SearchState state) {
             return (state.library == null || state.library instanceof JarredScript) && !state.searchFile.equalsIgnoreCase("");
         }
-        
+
         public boolean trySearch(SearchState state) {
             // This code exploits the fact that all .jar files will be found for the JarredScript feature.
             // This is where the basic extension mechanism gets fixed
@@ -613,11 +652,20 @@ public class LoadService {
                 }
 
                 // quietly try to load the class
-                Class theClass = runtime.getJavaSupport().loadJavaClassQuiet(className);
+                Class theClass = runtime.getJavaSupport().loadJavaClass(className);
                 state.library = new ClassExtensionLibrary(className + ".java", theClass);
-            } catch (Exception ee) {
-                state.library = null;
-                runtime.getGlobalVariables().clear("$!");
+            } catch (ClassNotFoundException cnfe) {
+                if (runtime.isDebug()) cnfe.printStackTrace();
+                // we ignore this and assume the jar is not an extension
+            } catch (UnsupportedClassVersionError ucve) {
+                if (runtime.isDebug()) ucve.printStackTrace();
+                throw runtime.newLoadError("JRuby ext built for wrong Java version in `" + finName + "': " + ucve);
+            } catch (IOException ioe) {
+                if (runtime.isDebug()) ioe.printStackTrace();
+                throw runtime.newLoadError("IOException loading extension `" + finName + "`: " + ioe);
+            } catch (Exception e) {
+                if (runtime.isDebug()) e.printStackTrace();
+                throw runtime.newLoadError("Exception loading extension `" + finName + "`: " + e);
             }
 
             // If there was a good library before, we go back to that
@@ -640,11 +688,11 @@ public class LoadService {
                 runtime.loadScript(script, wrap);
             }
         }
-        
+
         public boolean shouldTrySearch(SearchState state) {
             return state.library == null;
         }
-        
+
         public boolean trySearch(SearchState state) throws RaiseException {
             // no library or extension found, try to load directly as a class
             Script script;
@@ -674,7 +722,7 @@ public class LoadService {
         public String loadName;
         public SuffixType suffixType;
         public String searchFile;
-        
+
         public SearchState(String file) {
             loadName = file;
         }
@@ -728,7 +776,7 @@ public class LoadService {
                 searchFile = file;
             }
         }
-        
+
         @Override
         public String toString() {
             StringBuilder sb = new StringBuilder();
@@ -740,7 +788,7 @@ public class LoadService {
             return sb.toString();
         }
     }
-    
+
     protected boolean tryLoadingLibraryOrScript(Ruby runtime, SearchState state) {
         // attempt to load the found library
         try {
@@ -756,7 +804,7 @@ public class LoadService {
             reraiseRaiseExceptions(e);
 
             if(runtime.getDebug().isTrue()) e.printStackTrace(runtime.getErr());
-            
+
             RaiseException re = newLoadErrorFromThrowable(runtime, state.searchFile, e);
             re.initCause(e);
             throw re;
@@ -835,7 +883,7 @@ public class LoadService {
 
     protected Library findLibraryWithoutCWD(SearchState state, String baseName, SuffixType suffixType) {
         Library library = null;
-        
+
         switch (suffixType) {
         case Both:
             library = findBuiltinLibrary(state, baseName, SuffixType.Source);
@@ -881,10 +929,10 @@ public class LoadService {
         }
         String file = state.loadName;
         if (file.endsWith(".so") || file.endsWith(".dll") || file.endsWith(".bundle")) {
-            if (RubyInstanceConfig.nativeEnabled) {
+            if (runtime.getInstanceConfig().isCextEnabled()) {
                 return new CExtension(resource);
             } else {
-                throw runtime.newLoadError("native code is disabled, can't load cext `" + resource.getName() + "'");
+                throw runtime.newLoadError("C extensions are disabled, can't load `" + resource.getName() + "'");
             }
         } else if (file.endsWith(".jar")) {
             return new JarredScript(resource);
@@ -897,7 +945,7 @@ public class LoadService {
 
     protected LoadServiceResource tryResourceFromCWD(SearchState state, String baseName,SuffixType suffixType) throws RaiseException {
         LoadServiceResource foundResource = null;
-        
+
         for (String suffix : suffixType.getSuffixes()) {
             String namePlusSuffix = baseName + suffix;
             // check current directory; if file exists, retrieve URL and return resource
@@ -915,7 +963,7 @@ public class LoadService {
             } catch (SecurityException secEx) {
             }
         }
-        
+
         return foundResource;
     }
 
@@ -951,7 +999,7 @@ public class LoadService {
 
         return foundResource;
     }
-    
+
     protected LoadServiceResource tryResourceFromJarURL(SearchState state, String baseName, SuffixType suffixType) {
         // if a jar or file URL, return load service resource directly without further searching
         LoadServiceResource foundResource = null;
@@ -994,12 +1042,12 @@ public class LoadService {
                     state.loadName = resolveLoadName(foundResource, namePlusSuffix);
                     break; // end suffix iteration
                 }
-            }    
+            }
         }
-        
+
         return foundResource;
     }
-    
+
     protected LoadServiceResource tryResourceFromLoadPathOrURL(SearchState state, String baseName, SuffixType suffixType) {
         LoadServiceResource foundResource = null;
 
@@ -1041,7 +1089,7 @@ public class LoadService {
 
             return null;
         }
-        
+
         Outer: for (int i = 0; i < loadPath.size(); i++) {
             // TODO this is really inefficient, and potentially a problem everytime anyone require's something.
             // we should try to make LoadPath a special array object.
@@ -1081,13 +1129,13 @@ public class LoadService {
                 }
             }
         }
-        
+
         return foundResource;
     }
-    
+
     protected LoadServiceResource tryResourceFromJarURLWithLoadPath(String namePlusSuffix, String loadPathEntry) {
         LoadServiceResource foundResource = null;
-        
+
         JarFile current = jarFiles.get(loadPathEntry);
         boolean isFileJarUrl = loadPathEntry.startsWith("file:") && loadPathEntry.indexOf("!/") != -1;
         String after = isFileJarUrl ? loadPathEntry.substring(loadPathEntry.indexOf("!/") + 2) + "/" : "";
@@ -1131,7 +1179,7 @@ public class LoadService {
                 }
             }
         }
-        
+
         return foundResource;
     }
 
@@ -1248,6 +1296,10 @@ public class LoadService {
                 entry = entry.substring("classpath:".length());
             }
 
+            if (name.startsWith(entry)) {
+                name = name.substring(entry.length());
+            }
+
             // otherwise, try to load from classpath (Note: Jar resources always uses '/')
             LoadServiceResource foundResource = getClassPathResource(classLoader, entry + "/" + name);
             if (foundResource != null) {
@@ -1257,8 +1309,8 @@ public class LoadService {
 
         // if name starts with a / we're done (classloader resources won't load with an initial /)
         if (name.charAt(0) == '/' || (name.length() > 1 && name.charAt(1) == ':')) return null;
-        
-        // Try to load from classpath without prefix. "A/b.rb" will not load as 
+
+        // Try to load from classpath without prefix. "A/b.rb" will not load as
         // "./A/b.rb" in a jar file.
         LoadServiceResource foundResource = getClassPathResource(classLoader, name);
         if (foundResource != null) {
@@ -1267,14 +1319,14 @@ public class LoadService {
 
         return null;
     }
-    
+
     /* Directories and unavailable resources are not able to open a stream. */
     protected boolean isRequireable(URL loc) {
         if (loc != null) {
                 if (loc.getProtocol().equals("file") && new java.io.File(getPath(loc)).isDirectory()) {
                         return false;
                 }
-                
+
                 try {
                 loc.openConnection();
                 return true;
@@ -1293,6 +1345,8 @@ public class LoadService {
         } else if (name.startsWith("classpath:")) {
             isClasspathScheme = true;
             name = name.substring("classpath:".length());
+        } else if(name.startsWith("file:") && name.indexOf("!/") != -1) {
+            name = name.substring(name.indexOf("!/") + 2);
         }
 
         debugLogTry("fileInClasspath", name);

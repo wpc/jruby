@@ -17,12 +17,7 @@ public class ReceiveSelfInstruction extends NoOperandInstr {
 
     @Override
     public Instr cloneForInlining(InlinerInfo ii) {
-        return new CopyInstr(ii.getRenamedVariable(result), ii.getCallReceiver());
-    }
-
-    @Override
-    public String toString() {
-        return super.toString();
+        return new CopyInstr(ii.getRenamedVariable(getResult()), ii.getCallReceiver());
     }
 
     @Override
@@ -30,7 +25,7 @@ public class ReceiveSelfInstruction extends NoOperandInstr {
         // result is a confusing name
 
         // SSS FIXME: Anything else to do here?? 
-        getResult().store(interp, context, self, self);
+        // getResult().store(interp, context, self, self);
         return null;
     }
 }

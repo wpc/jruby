@@ -52,7 +52,7 @@ import org.jruby.runtime.Block;
 import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.builtin.IRubyObject;
 
-import com.kenai.jaffl.LastError;
+import jnr.ffi.LastError;
 
 /**
  *
@@ -253,7 +253,7 @@ public class JRuby {
 
     /** rb_sys_fail */
     public static void sysFail(Ruby runtime, String message) {
-        final int n = LastError.getLastError();
+        final int n = LastError.getLastError(jnr.ffi.Runtime.getSystemRuntime());
         sysFail(runtime, message, n);
     }
 
@@ -275,6 +275,11 @@ public class JRuby {
         } catch (InterruptedException e) {
             // Thread wakeup, do nothing
         }
+    }
+    
+    public static long getMetaClass(IRubyObject object) {
+        RubyClass metaClass = object.getMetaClass();
+        return Handle.nativeHandle(metaClass);
     }
 
     public static final class NativeFunctionTask implements BlockingTask {

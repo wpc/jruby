@@ -177,6 +177,7 @@ import org.jruby.runtime.DynamicScope;
 import org.jruby.util.ByteList;
 import org.jruby.util.IdUtil;
 import org.jruby.util.RegexpOptions;
+import org.jruby.util.StringSupport;
 
 /** 
  *
@@ -204,10 +205,8 @@ public class ParserSupport {
     }
     
     public void allowDubyExtension(ISourcePosition position) {
-        if (!configuration.isDubyExtensionsEnabled()) {
-            throw new SyntaxException(PID.DUBY_EXTENSIONS_OFF, position,
-                    lexer.getCurrentLine(), "Duby extensions not configured");
-        }
+        throw new SyntaxException(PID.DUBY_EXTENSIONS_OFF, position,
+                lexer.getCurrentLine(), "Duby extensions not configured");
     }
     
     public StaticScope getCurrentScope() {
@@ -223,11 +222,11 @@ public class ParserSupport {
     }
     
     public void pushBlockScope() {
-        currentScope = new BlockStaticScope(currentScope);
+        currentScope = configuration.getRuntime().getStaticScopeFactory().newBlockScope(currentScope);
     }
     
     public void pushLocalScope() {
-        currentScope = new LocalStaticScope(currentScope);
+        currentScope = configuration.getRuntime().getStaticScopeFactory().newLocalScope(currentScope);
     }
     
     public Node arg_concat(ISourcePosition position, Node node1, Node node2) {
@@ -1534,7 +1533,7 @@ public class ParserSupport {
         if (name == "_") return identifier;
 
         StaticScope current = getCurrentScope();
-        if (current instanceof BlockStaticScope) {
+        if (current.isBlockScope()) {
             if (current.exists(name) >= 0) yyerror("duplicated argument name");
 
             if (warnings.isVerbose() && current.isDefined(name) >= 0) {
@@ -1622,7 +1621,9 @@ public class ParserSupport {
 
             for (Node fragment: dStrNode.childNodes()) {
                 if (fragment instanceof StrNode) {
-                    regexpFragmentCheck(end, ((StrNode) fragment).getValue());
+                    ByteList frag = ((StrNode) fragment).getValue();
+                    regexpFragmentCheck(end, frag);
+                    if (!lexer.isOneEight()) encoding = frag.getEncoding();
                 }
             }
 
@@ -1630,7 +1631,27 @@ public class ParserSupport {
         }
 
         // EvStrNode: #{val}: no fragment check, but at least set encoding
-        regexpFragmentCheck(end, ByteList.create(""));
+        ByteList empty = ByteList.create("");
+        regexpFragmentCheck(end, empty);
+        if (!lexer.isOneEight()) encoding = empty.getEncoding();
         return new DRegexpNode(position, options, encoding).add(contents);
     }
+    
+    // FIXME:  This logic is used by many methods in MRI, but we are only using it in lexer
+    // currently.  Consolidate this when we tackle a big encoding refactoring
+    public static int associateEncoding(ByteList buffer, Encoding newEncoding, int codeRange) {
+        Encoding bufferEncoding = buffer.getEncoding();
+                
+        if (newEncoding == bufferEncoding) return codeRange;
+        
+        // TODO: Special const error
+        
+        buffer.setEncoding(newEncoding);
+        
+        if (codeRange != StringSupport.CR_7BIT || !newEncoding.isAsciiCompatible()) {
+            return StringSupport.CR_UNKNOWN;
+        }
+        
+        return codeRange;
+    }    
 }

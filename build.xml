@@ -272,6 +272,7 @@
       <include name="org/jruby/util/CodegenUtils.java"/>
       <include name="org/jruby/util/log/*.java"/>
       <include name="org/jruby/util/SafePropertyAccessor.java"/>
+      <include name="org/jruby/util/cli/Options.java"/>
     </javac>
   </target>
 
@@ -386,10 +387,11 @@
       <zipfileset src="${build.lib.dir}/jffi-x86_64-Windows.jar"/>
       <zipfileset src="${build.lib.dir}/jffi-s390x-Linux.jar"/>
       <zipfileset src="${build.lib.dir}/joda-time-${joda.time.version}.jar"/>
-      <zipfileset src="${build.lib.dir}/snakeyaml-1.8.jar"/>
+      <zipfileset src="${build.lib.dir}/snakeyaml-1.9.jar"/>
       <zipfileset src="${build.lib.dir}/yecht.jar"/>
       <zipfileset src="${build.lib.dir}/yydebug.jar"/>
       <zipfileset src="${build.lib.dir}/nailgun-0.7.1.jar"/>
+      <zipfileset src="${build.lib.dir}/jzlib-1.1.0.jar"/>
       <metainf dir="spi">
         <include name="services/**"/>
       </metainf>
@@ -400,7 +402,7 @@
     </jar>
 
     <antcall target="add-emma-jars"/>
-    <antcall target="generate-ri-cache"/>
+    <!-- temporarily commented out due to JRUBY-6163 <antcall target="generate-ri-cache"/> -->
 
     <property name="jar-jruby.hasrun" value="true"/>
   </target>
@@ -488,10 +490,11 @@
       <zipfileset src="${build.lib.dir}/jffi-x86_64-Windows.jar"/>
       <zipfileset src="${build.lib.dir}/jffi-s390x-Linux.jar"/>
       <zipfileset src="${build.lib.dir}/joda-time-${joda.time.version}.jar"/>
-      <zipfileset src="${build.lib.dir}/snakeyaml-1.8.jar"/>
+      <zipfileset src="${build.lib.dir}/snakeyaml-1.9.jar"/>
       <zipfileset src="${build.lib.dir}/yecht.jar"/>
       <zipfileset src="${build.lib.dir}/yydebug.jar"/>
       <zipfileset src="${build.lib.dir}/nailgun-0.7.1.jar"/>
+      <zipfileset src="${build.lib.dir}/jzlib-1.1.0.jar"/>
       <metainf dir="spi">
         <include name="services/**"/>
       </metainf>
@@ -507,7 +510,7 @@
       <param name="bar.wrap" value="${lib.dir}/jruby.bar" />
     </antcall>
       
-    <antcall target="generate-ri-cache"/>
+    <!-- temporarily commented out due to JRUBY-6163 <antcall target="generate-ri-cache"/> -->
   </target>
   <target name="jarjar" depends="jar-jruby-dist"/>
 
@@ -646,10 +649,11 @@
       <zipfileset src="${build.lib.dir}/jffi-x86_64-Windows.jar"/>
       <zipfileset src="${build.lib.dir}/jffi-s390x-Linux.jar"/>
       <zipfileset src="${build.lib.dir}/joda-time-${joda.time.version}.jar"/>
-      <zipfileset src="${build.lib.dir}/snakeyaml-1.8.jar"/>
+      <zipfileset src="${build.lib.dir}/snakeyaml-1.9.jar"/>
       <zipfileset src="${build.lib.dir}/yecht.jar"/>
       <zipfileset src="${build.lib.dir}/yydebug.jar"/>
       <zipfileset src="${build.lib.dir}/nailgun-0.7.1.jar"/>
+      <zipfileset src="${build.lib.dir}/jzlib-1.1.0.jar"/>
       <metainf dir="spi">
         <include name="services/**"/>
       </metainf>
@@ -814,7 +818,7 @@
       <sysproperty key="jruby.home" value="${basedir}"/>
       <env key="GEM_PATH" value=""/> <!-- to ignore any gems installed in ~/.gem -->
       <env key="GEM_HOME" value="${jruby.gem.home.1.8}"/> <!-- to make sure we are working with JRuby and not RVM's gems -->
-      <arg line="-S gem install ${dev.gems}"/>
+      <arg line="-S gem install -n ${basedir}/bin ${dev.gems}"/>
     </java>
   </target>
 
@@ -843,6 +847,7 @@
       <classpath refid="build.classpath"/>
       <classpath path="${jruby.classes.dir}"/>
       <sysproperty key="jruby.home" value="${basedir}"/>
+      <env key="PATH" value="${basedir}/lib/ruby/gems/1.8/bin:${env.PATH}"/>
       <env key="GEM_PATH" value=""/> <!-- to ignore any gems installed in ~/.gem -->
       <arg line="-S gem install ${jruby.launcher.gem}"/>
     </java>
@@ -1066,6 +1071,7 @@
           <test name="${test}" if="test"/>
           <test name="org.jruby.test.ScriptTestSuite" todir="${test.results.dir}" unless="test"/>
           <test name="org.jruby.test.JRubyTestSuite" todir="${test.results.dir}" unless="test"/>
+          <test name="org.jruby.test.SlowTestSuite" todir="${test.results.dir}" unless="test"/>
           <test name="org.jruby.test.MRITestSuite" todir="${test.results.dir}" unless="test"/>
           <test name="org.jruby.test.RubiconTestSuite" todir="${test.results.dir}" unless="test"/>
           <test name="org.jruby.test.RubyTestTestSuite" todir="${test.results.dir}" unless="test"/>
@@ -1117,7 +1123,7 @@
   </macrodef>
 
   <target name="test-security-manager" depends="jar-jruby">
-    <java classname="org.jruby.Main" fork="true" failonerror="false">
+    <java classname="org.jruby.Main" fork="true" failonerror="true">
       <classpath refid="test.class.path"/>
 
       <sysproperty key="java.security.manager" value=""/>

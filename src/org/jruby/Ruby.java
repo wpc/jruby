@@ -77,8 +77,8 @@ import org.jruby.exceptions.MainExitException;
 import org.jruby.exceptions.RaiseException;
 import org.jruby.ext.JRubyPOSIXHandler;
 import org.jruby.ext.LateLoadingLibrary;
-import org.jruby.ext.posix.POSIX;
-import org.jruby.ext.posix.POSIXFactory;
+import jnr.posix.POSIX;
+import jnr.posix.POSIXFactory;
 import org.jruby.internal.runtime.GlobalVariables;
 import org.jruby.internal.runtime.ThreadService;
 import org.jruby.internal.runtime.ValueAccessor;
@@ -86,7 +86,6 @@ import org.jruby.javasupport.JavaSupport;
 import org.jruby.management.ClassCache;
 import org.jruby.management.Config;
 import org.jruby.management.ParserStats;
-import org.jruby.parser.EvalStaticScope;
 import org.jruby.parser.Parser;
 import org.jruby.parser.ParserConfiguration;
 import org.jruby.runtime.Binding;
@@ -126,7 +125,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.net.BindException;
 import java.nio.channels.ClosedChannelException;
+import java.security.SecureRandom;
 import java.util.EnumSet;
+import java.util.Random;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 
@@ -138,12 +139,16 @@ import org.jruby.runtime.opto.Invalidator;
 import org.jruby.evaluator.ASTInterpreter;
 import org.jruby.exceptions.Unrescuable;
 import org.jruby.ext.coverage.CoverageData;
+import org.jruby.ext.jruby.JRubyConfigLibrary;
+import org.jruby.ext.jruby.JRubyLibrary;
 import org.jruby.internal.runtime.methods.DynamicMethod;
 import org.jruby.interpreter.Interpreter;
 import org.jruby.javasupport.util.RuntimeHelpers;
 import org.jruby.management.BeanManager;
 import org.jruby.management.BeanManagerFactory;
 import org.jruby.parser.StaticScope;
+import org.jruby.parser.IRStaticScopeFactory;
+import org.jruby.parser.StaticScopeFactory;
 import org.jruby.platform.Platform;
 import org.jruby.runtime.ClassIndex;
 import org.jruby.runtime.MethodIndex;
@@ -190,6 +195,9 @@ public final class Ruby {
         if(config.isSamplingEnabled()) {
             org.jruby.util.SimpleSampler.registerThreadContext(threadService.getCurrentContext());
         }
+        
+        this.staticScopeFactory = config.getCompileMode() == CompileMode.OFFIR ?
+                new IRStaticScopeFactory() : new StaticScopeFactory();
 
         this.in                 = config.getInput();
         this.out                = config.getOutput();
@@ -201,6 +209,15 @@ public final class Ruby {
         this.beanManager        = BeanManagerFactory.create(this, config.isManagementEnabled());
         this.jitCompiler        = new JITCompiler(this);
         this.parserStats        = new ParserStats(this);
+        
+        Random myRandom;
+        try {
+            myRandom = new SecureRandom();
+        } catch (Throwable t) {
+            LOG.debug("unable to instantiate SecureRandom, falling back on Random", t);
+            myRandom = new Random();
+        }
+        this.random = myRandom;
         
         this.beanManager.register(new Config(this));
         this.beanManager.register(parserStats);
@@ -337,7 +354,7 @@ public final class Ruby {
     public IRubyObject evalScriptlet(String script) {
         ThreadContext context = getCurrentContext();
         DynamicScope currentScope = context.getCurrentScope();
-        ManyVarsDynamicScope newScope = new ManyVarsDynamicScope(new EvalStaticScope(currentScope.getStaticScope()), currentScope);
+        ManyVarsDynamicScope newScope = new ManyVarsDynamicScope(getStaticScopeFactory().newEvalScope(currentScope.getStaticScope()), currentScope);
 
         return evalScriptlet(script, newScope);
     }
@@ -1075,7 +1092,7 @@ public final class Ruby {
         
         // Construct key services
         loadService = config.createLoadService(this);
-        posix = POSIXFactory.getPOSIX(new JRubyPOSIXHandler(this), RubyInstanceConfig.nativeEnabled);
+        posix = POSIXFactory.getPOSIX(new JRubyPOSIXHandler(this), config.isNativeEnabled());
         javaSupport = new JavaSupport(this);
         
         executor = new ThreadPoolExecutor(
@@ -1109,19 +1126,22 @@ public final class Ruby {
         RubyGlobal.createGlobals(tc, this);
 
         // Prepare LoadService and load path
-        getLoadService().init(config.loadPaths());
+        getLoadService().init(config.getLoadPaths());
         
         booting = false;
 
         // initialize builtin libraries
         initBuiltins();
         
+        // init Ruby-based kernel
+        initRubyKernel();
+        
         if(config.isProfiling()) {
             getLoadService().require("jruby/profiler/shutdown_hook");
         }
 
         // Require in all libraries specified on command line
-        for (String scriptName : config.requiredLibraries()) {
+        for (String scriptName : config.getRequiredLibraries()) {
             loadService.require(scriptName);
         }
     }
@@ -1319,6 +1339,21 @@ public final class Ruby {
         if (profile.allowClass("Continuation")) {
             RubyContinuation.createContinuation(this);
         }
+        
+        if (profile.allowClass("Enumerator")) {
+            RubyEnumerator.defineEnumerator(this);
+        }
+        
+        if (is1_9()) {
+            if (RubyInstanceConfig.COROUTINE_FIBERS) {
+                LoadService.reflectedLoad(this, "fiber", "org.jruby.ext.fiber.CoroutineFiberLibrary", getJRubyClassLoader(), false);
+            } else {
+                LoadService.reflectedLoad(this, "fiber", "org.jruby.ext.fiber.ThreadFiberLibrary", getJRubyClassLoader(), false);
+            }
+        }
+        
+        // Load the JRuby::Config module for accessing configuration settings from Ruby
+        new JRubyConfigLibrary().load(this, false);
     }
 
     public static final int NIL_PREFILLED_ARRAY_SIZE = RubyArray.ARRAY_DEFAULT_SIZE * 8;
@@ -1457,53 +1492,45 @@ public final class Ruby {
         addLazyBuiltin("jruby_ext.jar", "jruby", "org.jruby.ext.jruby.JRubyLibrary");
         addLazyBuiltin("jruby/util.rb", "jruby/util", "org.jruby.ext.jruby.JRubyUtilLibrary");
         addLazyBuiltin("jruby/type.rb", "jruby/type", "org.jruby.ext.jruby.JRubyTypeLibrary");
-        addLazyBuiltin("iconv.jar", "iconv", "org.jruby.libraries.IConvLibrary");
-        addLazyBuiltin("nkf.jar", "nkf", "org.jruby.libraries.NKFLibrary");
-        addLazyBuiltin("stringio.jar", "stringio", "org.jruby.libraries.StringIOLibrary");
-        addLazyBuiltin("strscan.jar", "strscan", "org.jruby.libraries.StringScannerLibrary");
-        addLazyBuiltin("zlib.jar", "zlib", "org.jruby.libraries.ZlibLibrary");
-        addLazyBuiltin("enumerator.jar", "enumerator", "org.jruby.libraries.EnumeratorLibrary");
+        addLazyBuiltin("iconv.jar", "iconv", "org.jruby.ext.iconv.IConvLibrary");
+        addLazyBuiltin("nkf.jar", "nkf", "org.jruby.ext.nkf.NKFLibrary");
+        addLazyBuiltin("stringio.jar", "stringio", "org.jruby.ext.stringio.StringIOLibrary");
+        addLazyBuiltin("strscan.jar", "strscan", "org.jruby.ext.strscan.StringScannerLibrary");
+        addLazyBuiltin("zlib.jar", "zlib", "org.jruby.ext.zlib.ZlibLibrary");
+        addLazyBuiltin("enumerator.jar", "enumerator", "org.jruby.ext.enumerator.EnumeratorLibrary");
         addLazyBuiltin("readline.jar", "readline", "org.jruby.ext.ReadlineService");
-        addLazyBuiltin("thread.jar", "thread", "org.jruby.libraries.ThreadLibrary");
-        addLazyBuiltin("thread.rb", "thread", "org.jruby.libraries.ThreadLibrary");
-        addLazyBuiltin("digest.jar", "digest.so", "org.jruby.libraries.DigestLibrary");
-        addLazyBuiltin("digest/md5.jar", "digest/md5", "org.jruby.libraries.MD5");
-        addLazyBuiltin("digest/rmd160.jar", "digest/rmd160", "org.jruby.libraries.RMD160");
-        addLazyBuiltin("digest/sha1.jar", "digest/sha1", "org.jruby.libraries.SHA1");
-        addLazyBuiltin("digest/sha2.jar", "digest/sha2", "org.jruby.libraries.SHA2");
-        addLazyBuiltin("bigdecimal.jar", "bigdecimal", "org.jruby.libraries.BigDecimalLibrary");
-        addLazyBuiltin("io/wait.jar", "io/wait", "org.jruby.libraries.IOWaitLibrary");
-        addLazyBuiltin("etc.jar", "etc", "org.jruby.libraries.EtcLibrary");
-        addLazyBuiltin("weakref.rb", "weakref", "org.jruby.ext.WeakRefLibrary");
-        addLazyBuiltin("delegate_internal.jar", "delegate_internal", "org.jruby.ext.DelegateLibrary");
-        addLazyBuiltin("timeout.rb", "timeout", "org.jruby.ext.Timeout");
+        addLazyBuiltin("thread.jar", "thread", "org.jruby.ext.thread.ThreadLibrary");
+        addLazyBuiltin("thread.rb", "thread", "org.jruby.ext.thread.ThreadLibrary");
+        addLazyBuiltin("digest.jar", "digest.so", "org.jruby.ext.digest.DigestLibrary");
+        addLazyBuiltin("digest/md5.jar", "digest/md5", "org.jruby.ext.digest.MD5");
+        addLazyBuiltin("digest/rmd160.jar", "digest/rmd160", "org.jruby.ext.digest.RMD160");
+        addLazyBuiltin("digest/sha1.jar", "digest/sha1", "org.jruby.ext.digest.SHA1");
+        addLazyBuiltin("digest/sha2.jar", "digest/sha2", "org.jruby.ext.digest.SHA2");
+        addLazyBuiltin("bigdecimal.jar", "bigdecimal", "org.jruby.ext.bigdecimal.BigDecimalLibrary");
+        addLazyBuiltin("io/wait.jar", "io/wait", "org.jruby.ext.io.wait.IOWaitLibrary");
+        addLazyBuiltin("etc.jar", "etc", "org.jruby.ext.etc.EtcLibrary");
+        addLazyBuiltin("weakref.rb", "weakref", "org.jruby.ext.weakref.WeakRefLibrary");
+        addLazyBuiltin("delegate_internal.jar", "delegate_internal", "org.jruby.ext.delegate.DelegateLibrary");
+        addLazyBuiltin("timeout.rb", "timeout", "org.jruby.ext.timeout.Timeout");
         addLazyBuiltin("socket.jar", "socket", "org.jruby.ext.socket.SocketLibrary");
-        addLazyBuiltin("rbconfig.rb", "rbconfig", "org.jruby.libraries.RbConfigLibrary");
-        addLazyBuiltin("jruby/serialization.rb", "serialization", "org.jruby.libraries.JRubySerializationLibrary");
+        addLazyBuiltin("rbconfig.rb", "rbconfig", "org.jruby.ext.rbconfig.RbConfigLibrary");
+        addLazyBuiltin("jruby/serialization.rb", "serialization", "org.jruby.ext.jruby.JRubySerializationLibrary");
         addLazyBuiltin("ffi-internal.jar", "ffi-internal", "org.jruby.ext.ffi.FFIService");
-        addLazyBuiltin("tempfile.rb", "tempfile", "org.jruby.libraries.TempfileLibrary");
-        addLazyBuiltin("fcntl.rb", "fcntl", "org.jruby.libraries.FcntlLibrary");
+        addLazyBuiltin("tempfile.rb", "tempfile", "org.jruby.ext.tempfile.TempfileLibrary");
+        addLazyBuiltin("fcntl.rb", "fcntl", "org.jruby.ext.fcntl.FcntlLibrary");
         addLazyBuiltin("rubinius.jar", "rubinius", "org.jruby.ext.rubinius.RubiniusLibrary");
         addLazyBuiltin("yecht.jar", "yecht", "YechtService");
 
         if (is1_9()) {
             addLazyBuiltin("mathn/complex.jar", "mathn/complex", "org.jruby.ext.mathn.Complex");
             addLazyBuiltin("mathn/rational.jar", "mathn/rational", "org.jruby.ext.mathn.Rational");
-            addLazyBuiltin("fiber.rb", "fiber", "org.jruby.libraries.FiberExtLibrary");
+            addLazyBuiltin("fiber.rb", "fiber", "org.jruby.ext.fiber.FiberExtLibrary");
             addLazyBuiltin("psych.jar", "psych", "org.jruby.ext.psych.PsychLibrary");
             addLazyBuiltin("coverage.jar", "coverage", "org.jruby.ext.coverage.CoverageLibrary");
         }
 
         if(RubyInstanceConfig.NATIVE_NET_PROTOCOL) {
-            addLazyBuiltin("net/protocol.rb", "net/protocol", "org.jruby.libraries.NetProtocolBufferedIOLibrary");
-        }
-        
-        if (is1_9()) {
-            if (RubyInstanceConfig.COROUTINE_FIBERS) {
-                LoadService.reflectedLoad(this, "fiber", "org.jruby.ext.fiber.CoroutineFiberLibrary", getJRubyClassLoader(), false);
-            } else {
-                LoadService.reflectedLoad(this, "fiber", "org.jruby.ext.fiber.ThreadFiberLibrary", getJRubyClassLoader(), false);
-            }
+            addLazyBuiltin("net/protocol.rb", "net/protocol", "org.jruby.ext.net.protocol.NetProtocolBufferedIOLibrary");
         }
         
         addBuiltinIfAllowed("openssl.jar", new Library() {
@@ -1518,25 +1545,21 @@ public final class Ruby {
             }
         });
         
-        String[] builtins = {"jsignal_internal", "generator_internal"};
-        for (String library : builtins) {
-            addBuiltinIfAllowed(library + ".rb", new BuiltinScript(library));
-        }
-        
         RubyKernel.autoload(topSelf, newSymbol("Java"), newString("java"));
-
-        if(is1_9()) {
-            // see ruby.c's ruby_init_gems function
-            loadFile("builtin/prelude.rb", getJRubyClassLoader().getResourceAsStream("builtin/prelude.rb"), false);
-            if (!config.isDisableGems()) {
-                // NOTE: This has been disabled because gem_prelude is terribly broken.
-                //       We just require 'rubygems' in gem_prelude, at least for now.
-                //defineModule("Gem"); // dummy Gem module for prelude
-                loadFile("builtin/gem_prelude.rb", getJRubyClassLoader().getResourceAsStream("builtin/gem_prelude.rb"), false);
-            }
+    }
+    
+    private void initRubyKernel() {
+        // load Ruby parts of core
+        loadService.load("jruby/kernel.rb", false);
+        
+        switch (config.getCompatVersion()) {
+            case RUBY1_8:
+                loadService.load("jruby/kernel18.rb", false);
+                break;
+            case RUBY1_9:
+                loadService.load("jruby/kernel19.rb", false);
+                break;
         }
-
-        getLoadService().require("enumerator");
     }
 
     private void addLazyBuiltin(String name, String shortName, String className) {
@@ -1990,14 +2013,14 @@ public final class Ruby {
     public IRubyObject getPasswdStruct() {
         return passwdStruct;
     }
-    void setPasswdStruct(RubyClass passwdStruct) {
+    public void setPasswdStruct(RubyClass passwdStruct) {
         this.passwdStruct = passwdStruct;
     }
 
     public IRubyObject getGroupStruct() {
         return groupStruct;
     }
-    void setGroupStruct(RubyClass groupStruct) {
+    public void setGroupStruct(RubyClass groupStruct) {
         this.groupStruct = groupStruct;
     }
 
@@ -2475,7 +2498,7 @@ public final class Ruby {
         }
 
         PrintStream errorStream = getErrorStream();
-        errorStream.print(config.getTraceType().printBacktrace(excp));
+        errorStream.print(config.getTraceType().printBacktrace(excp, errorStream == System.err && getPosix().isatty(FileDescriptor.err)));
     }
     
     public void loadFile(String scriptName, InputStream in, boolean wrap) {
@@ -3454,6 +3477,14 @@ public final class Ruby {
         return internal;
     }
 
+    public int getFilenoIntMapSize() {
+        return filenoIntExtMap.size();
+    }
+
+    public void removeFilenoIntMap(int internal) {
+        filenoIntExtMap.remove(internal);
+    }
+
     /**
      * Get the "external" fileno for a given ChannelDescriptor. Primarily for
      * the shared 0, 1, and 2 filenos, which we can't actually share across
@@ -3973,8 +4004,15 @@ public final class Ruby {
     public CoverageData getCoverageData() {
         return coverageData;
     }
+    
+    public Random getRandom() {
+        return random;
+    }
+    
+    public StaticScopeFactory getStaticScopeFactory() {
+        return staticScopeFactory;
+    }
 
-    private volatile int constantGeneration = 1;
     private final Invalidator constantInvalidator;
     private final ThreadService threadService;
     
@@ -4084,7 +4122,7 @@ public final class Ruby {
     // must be located be in this order!
     private volatile static boolean securityRestricted = false;
     static {
-        if (SafePropertyAccessor.isSecurityProtected("jruby.reflection")) {
+        if (SafePropertyAccessor.isSecurityProtected("jruby.reflected.handles")) {
             // can't read non-standard properties
             securityRestricted = true;
         } else {
@@ -4201,4 +4239,9 @@ public final class Ruby {
     
     /** The "thread local" runtime. Set to the global runtime if unset. */
     private static ThreadLocal<Ruby> threadLocalRuntime = new ThreadLocal<Ruby>();
+    
+    /** The runtime-local random number generator. Uses SecureRandom if permissions allow. */
+    private final Random random;
+    
+    private final StaticScopeFactory staticScopeFactory;
 }

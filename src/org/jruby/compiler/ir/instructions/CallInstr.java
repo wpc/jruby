@@ -1,8 +1,12 @@
 package org.jruby.compiler.ir.instructions;
 
+import java.util.Arrays;
+import java.util.List;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.HashMap;
 
+import org.jruby.RubyArray;
 import org.jruby.RubyMethod;
 import org.jruby.RubyProc;
 import org.jruby.util.TypeConverter;
@@ -13,6 +17,7 @@ import org.jruby.compiler.ir.operands.MethAddr;
 import org.jruby.compiler.ir.operands.MetaObject;
 import org.jruby.compiler.ir.operands.MethodHandle;
 import org.jruby.compiler.ir.operands.Operand;
+import org.jruby.compiler.ir.operands.Splat;
 import org.jruby.compiler.ir.operands.StringLiteral;
 import org.jruby.compiler.ir.operands.Variable;
 import org.jruby.compiler.ir.IRClass;
@@ -23,18 +28,22 @@ import org.jruby.internal.runtime.methods.DynamicMethod;
 import org.jruby.interpreter.InterpreterContext;
 import org.jruby.javasupport.util.RuntimeHelpers;
 import org.jruby.runtime.Block;
+import org.jruby.runtime.CallSite;
 import org.jruby.runtime.CallType;
+import org.jruby.runtime.MethodIndex;
 import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.builtin.IRubyObject;
 
 /*
  * args field: [self, receiver, *args]
  */
-public class CallInstr extends MultiOperandInstr {
+public class CallInstr extends Instr {
     protected Operand   receiver;
     protected Operand[] arguments;
     protected MethAddr  methAddr;
     protected Operand   closure;
+    protected CallType  callType;
+    public CallSite callAdapter;
 
     private boolean flagsComputed;
     private boolean canBeEval;
@@ -42,23 +51,36 @@ public class CallInstr extends MultiOperandInstr {
     public HashMap<DynamicMethod, Integer> profile;
     
     public static CallInstr create(Variable result, MethAddr methAddr, Operand receiver, Operand[] args, Operand closure) {
-        return new CallInstr(result, methAddr, receiver, args, closure);
+        return new CallInstr(CallType.NORMAL, result, methAddr, receiver, args, closure);
     }
     
-    public CallInstr(Variable result, MethAddr methAddr, Operand receiver, Operand[] args, Operand closure) {
-        this(Operation.CALL, result, methAddr, receiver, args, closure);
+    public static CallInstr create(CallType callType, Variable result, MethAddr methAddr, Operand receiver, Operand[] args, Operand closure) {
+        return new CallInstr(callType, result, methAddr, receiver, args, closure);
+    }
+    
+    public CallInstr(CallType callType, Variable result, MethAddr methAddr, Operand receiver, Operand[] args, Operand closure) {
+        this(Operation.CALL, callType, result, methAddr, receiver, args, closure);
     }
 
-    public CallInstr(Operation op, Variable result, MethAddr methAddr, Operand receiver, Operand[] args, Operand closure) {
+    protected CallInstr(Operation op, CallType callType, Variable result, MethAddr methAddr, Operand receiver, Operand[] args, Operand closure) {
         super(op, result);
 
         this.receiver = receiver;
         this.arguments = args;
         this.methAddr = methAddr;
         this.closure = closure;
+        this.callType = callType;
         flagsComputed = false;
         canBeEval = true;
         targetRequiresCallersBinding = true;
+        if (callType != null) {
+            switch (callType) {
+                case NORMAL    : callAdapter = MethodIndex.getCallSite(methAddr.toString()); break;
+                case FUNCTIONAL: callAdapter = MethodIndex.getFunctionalCallSite(methAddr.toString()); break;
+                case VARIABLE  : callAdapter = MethodIndex.getVariableCallSite(methAddr.toString()); break;
+                case SUPER     : callAdapter = MethodIndex.getSuperCallSite(); break;
+            }
+        }
     }
 
     public Operand[] getOperands() {
@@ -85,6 +107,10 @@ public class CallInstr extends MultiOperandInstr {
     public Operand[] getCallArgs() {
         return arguments;
     }
+    
+    public CallType getCallType() {
+        return callType;
+    }
 
     @Override
     public void simplifyOperands(Map<Operand, Operand> valueMap) {
@@ -99,11 +125,11 @@ public class CallInstr extends MultiOperandInstr {
     }
 
     public Operand[] cloneCallArgs(InlinerInfo ii) {
-        int length = arguments.length;
-        Operand[] clonedArgs = new Operand[length];
+        int i = 0;
+        Operand[] clonedArgs = new Operand[arguments.length];
 
-        for (int i = 0; i < length; i++) {
-            clonedArgs[i] = arguments[i].cloneForInlining(ii);
+        for (Operand a: arguments) {
+            clonedArgs[i++] = a.cloneForInlining(ii);
         }
 
         return clonedArgs;
@@ -212,81 +238,55 @@ public class CallInstr extends MultiOperandInstr {
     @Override
     public String toString() {
         return ""
-                + (result == null ? "" : result + " = ")
-                + operation + "(" + methAddr + ", " + receiver + ", " +
+                + (getResult() == null ? "" : getResult() + " = ")
+                + getOperation() + "(" + methAddr + ", " + receiver + ", " +
                 java.util.Arrays.toString(getCallArgs())
                 + (closure == null ? "" : ", &" + closure) + ")";
     }
 
     public Instr cloneForInlining(InlinerInfo ii) {
-        return new CallInstr(ii.getRenamedVariable(result), (MethAddr) methAddr.cloneForInlining(ii), receiver.cloneForInlining(ii), cloneCallArgs(ii), closure == null ? null : closure.cloneForInlining(ii));
+        return new CallInstr(callType, ii.getRenamedVariable(getResult()), (MethAddr) methAddr.cloneForInlining(ii), receiver.cloneForInlining(ii), cloneCallArgs(ii), closure == null ? null : closure.cloneForInlining(ii));
    }
-
-// --------------- Private methods ---------------
-
-    private static Operand[] buildAllArgs(Operand methAddr, Operand receiver, Operand[] callArgs, Operand closure) {
-        Operand[] allArgs = new Operand[callArgs.length + 2 + ((closure != null) ? 1 : 0)];
-
-        assert methAddr != null : "METHADDR is null";
-        assert receiver != null : "RECEIVER is null";
-
-
-        allArgs[0] = methAddr;
-        allArgs[1] = receiver;
-        for (int i = 0; i < callArgs.length; i++) {
-            assert callArgs[i] != null : "ARG " + i + " is null";
-
-            allArgs[i + 2] = callArgs[i];
-        }
-
-        if (closure != null) allArgs[callArgs.length + 2] = closure;
-
-        return allArgs;
-    }
-    
-    private Label interpretMethodHandle(InterpreterContext interp, ThreadContext context, 
-            IRubyObject self, MethodHandle mh, IRubyObject[] args) {
-        assert mh.getMethodNameOperand() == getReceiver();
-
-        IRubyObject resultValue;
-        DynamicMethod m = mh.getResolvedMethod();
-        String mn = mh.getResolvedMethodName();
-        IRubyObject ro = mh.getReceiverObj();
-        if (m.isUndefined()) {
-            resultValue = RuntimeHelpers.callMethodMissing(context, ro,
-                    m.getVisibility(), mn, CallType.FUNCTIONAL, args, 
-                    prepareBlock(interp, context, self));
-        } else {
-            try {
-                resultValue = m.call(context, ro, ro.getMetaClass(), mn, args,
-                        prepareBlock(interp, context, self));
-            } catch (org.jruby.exceptions.JumpException.BreakJump bj) {
-                resultValue = (IRubyObject) bj.getValue();
-            }
-        }
-        
-        getResult().store(interp, context, self, resultValue);
-        return null;        
-    }
 
     @Override
     public Label interpret(InterpreterContext interp, ThreadContext context, IRubyObject self) {
-        Object ma = methAddr.retrieve(interp, context, self);
-        IRubyObject[] args = prepareArguments(interp, context, self, getCallArgs());
-        
-        if (ma instanceof MethodHandle) return interpretMethodHandle(interp, context, self, (MethodHandle) ma, args);
-
         IRubyObject object = (IRubyObject) getReceiver().retrieve(interp, context, self);
+        IRubyObject[] args = prepareArguments(interp, context, self, getCallArgs());
+
+        Object ma = methAddr.retrieve(interp, context, self);
+        if (ma instanceof MethodHandle) return interpretMethodHandle(interp, context, self, (MethodHandle) ma, args);
         String name = ma.toString(); // SSS FIXME: If this is not a ruby string or a symbol, then this is an error in the source code!
+
+        Block  block = prepareBlock(interp, context, self);
+
         Object resultValue;
         try {
-            resultValue = RuntimeHelpers.invoke(context, object, name, args, 
-                    prepareBlock(interp, context, self));
-        } catch (org.jruby.exceptions.JumpException.BreakJump bj) {
-            resultValue = (IRubyObject) bj.getValue();
+             if (callType == null) {
+                 resultValue = RuntimeHelpers.invoke(context, object, name, args, (self == object) ? CallType.FUNCTIONAL : CallType.NORMAL, block);
+             }
+             else {
+                 // resultValue = RuntimeHelpers.invoke(context, object, name, args, callType, block);
+                 //
+                 // SSS FIXME:
+                 // Some downstream calls dont like if I call the  args[] boxed version with fewer than
+                 // 4 arguments!  I think it is bad practice and a bug for those calls to bomb when we
+                 // invoke the boxed rather than the unboxed version.  But, since some of this is not
+                 // in JRuby core, we'll bite the bullet for now -- this whole CallInstr setup needs
+                 // cleaning up to use specialized versions.
+                 switch (args.length) {
+                 case 0: resultValue = callAdapter.call(context, self, object, block); break;
+                 case 1: resultValue = callAdapter.call(context, self, object, args[0], block); break;
+                 case 2: resultValue = callAdapter.call(context, self, object, args[0], args[1], block); break;
+                 case 3: resultValue = callAdapter.call(context, self, object, args[0], args[1], args[2], block); break;
+                 default: resultValue = callAdapter.call(context, self, object, args, block);
+                 }
+             }
+        }
+        finally {
+            block.escape();
         }
 
-        getResult().store(interp, context, self, resultValue);
+        if (getResult() != null) getResult().store(interp, context, self, resultValue);
         return null;
     }
 
@@ -337,6 +337,22 @@ public class CallInstr extends MultiOperandInstr {
         return null;
     }
      */
+    
+    protected IRubyObject[] prepareArguments(InterpreterContext interp, ThreadContext context, IRubyObject self, Operand[] args) {
+        // SSS FIXME: This encoding of arguments as an array penalizes splats, but keeps other argument arrays fast
+        // since there is no array list --> array transformation
+        List<IRubyObject> argList = new ArrayList<IRubyObject>();
+        for (int i = 0; i < args.length; i++) {
+            IRubyObject rArg = (IRubyObject)args[i].retrieve(interp, context, self);
+            if (args[i] instanceof Splat) {
+                argList.addAll(Arrays.asList(((RubyArray)rArg).toJavaArray()));
+            } else {
+                argList.add(rArg);
+            }
+        }
+
+        return argList.toArray(new IRubyObject[argList.size()]);
+    }
 
     protected Block prepareBlock(InterpreterContext interp, ThreadContext context, IRubyObject self) {
         if (closure == null) return Block.NULL_BLOCK;
@@ -360,5 +376,47 @@ public class CallInstr extends MultiOperandInstr {
         // Blocks passed in through calls are always normal blocks, no matter where they came from
         b.type = Block.Type.NORMAL;
         return b;
+    }
+
+// --------------- Private methods ---------------
+
+    private static Operand[] buildAllArgs(Operand methAddr, Operand receiver, Operand[] callArgs, Operand closure) {
+        Operand[] allArgs = new Operand[callArgs.length + 2 + ((closure != null) ? 1 : 0)];
+
+        assert methAddr != null : "METHADDR is null";
+        assert receiver != null : "RECEIVER is null";
+
+
+        allArgs[0] = methAddr;
+        allArgs[1] = receiver;
+        for (int i = 0; i < callArgs.length; i++) {
+            assert callArgs[i] != null : "ARG " + i + " is null";
+
+            allArgs[i + 2] = callArgs[i];
+        }
+
+        if (closure != null) allArgs[callArgs.length + 2] = closure;
+
+        return allArgs;
+    }
+
+    private Label interpretMethodHandle(InterpreterContext interp, ThreadContext context, 
+            IRubyObject self, MethodHandle mh, IRubyObject[] args) {
+        assert mh.getMethodNameOperand() == getReceiver();
+
+        IRubyObject resultValue;
+        DynamicMethod m = mh.getResolvedMethod();
+        String mn = mh.getResolvedMethodName();
+        IRubyObject ro = mh.getReceiverObj();
+        if (m.isUndefined()) {
+            resultValue = RuntimeHelpers.callMethodMissing(context, ro,
+                    m.getVisibility(), mn, CallType.FUNCTIONAL, args, 
+                    prepareBlock(interp, context, self));
+        } else {
+            resultValue = m.call(context, ro, ro.getMetaClass(), mn, args, prepareBlock(interp, context, self));
+        }
+        
+        getResult().store(interp, context, self, resultValue);
+        return null;        
     }
 }

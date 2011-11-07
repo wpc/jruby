@@ -8,12 +8,15 @@ import org.jruby.RubyMatchData;
 import org.jruby.RubyModule;
 import org.jruby.RubyRegexp;
 import org.jruby.RubyString;
+import org.jruby.compiler.ir.IRClosure;
+import org.jruby.compiler.ir.IRScope;
 import org.jruby.compiler.ir.Operation;
 import org.jruby.compiler.ir.instructions.jruby.BlockGivenInstr;
 import org.jruby.compiler.ir.instructions.jruby.CheckArityInstr;
 import org.jruby.compiler.ir.operands.BooleanLiteral;
 import org.jruby.compiler.ir.operands.Fixnum;
 import org.jruby.compiler.ir.operands.Label;
+import org.jruby.compiler.ir.operands.MetaObject;
 import org.jruby.compiler.ir.operands.MethAddr;
 import org.jruby.compiler.ir.operands.Nil;
 import org.jruby.compiler.ir.operands.Operand;
@@ -24,6 +27,7 @@ import org.jruby.interpreter.InterpreterContext;
 import org.jruby.javasupport.util.RuntimeHelpers;
 import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.runtime.Arity;
+import org.jruby.runtime.CallType;
 import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.Visibility;
 import org.jruby.util.ByteList;
@@ -33,12 +37,12 @@ public class JRubyImplCallInstr extends CallInstr {
     //
     // 1. Most of these are there to support defined?  I just did a dumb translation of the
     //    bytecode instrs from the existing AST compiler.  This code needs cleanup!  Most of
-    //    the defined? inlined IR instructions in IRBuilder should be cleanly tucked away into a
-    //    defined? support runtime library with a relatively clean API.
+    //    the defined? inlined IR instructions in IRBuilder should be cleanly tucked away
+    //    into a defined? support runtime library with a relatively clean API.
     //
-    // 2. Some of the other methods are a little arbitrary as well and come from the first pass
-    //    of trying to mimic behavior of the previous AST compiler.  This set of code can be
-    //    cleaned up in a later pass.
+    // 2. Some of the other methods are a little arbitrary as well and come from the
+    //    first pass of trying to mimic behavior of the previous AST compiler.  This code
+    //    can be cleaned up in a later pass.
     public enum JRubyImplementationMethod {
        // SSS FIXME: Note that compiler/impl/BaseBodyCompiler is using op_match2 for match() and and op_match for match2,
        // and we are replicating it here ... Is this a bug there?
@@ -50,19 +54,17 @@ public class JRubyImplCallInstr extends CallInstr {
        RT_GET_BACKREF("runtime_getBackref"),
        RTH_GET_DEFINED_CONSTANT_OR_BOUND_METHOD("getDefinedConstantOrBoundMethod"),
        BLOCK_GIVEN("block_isGiven"), // SSS FIXME: Should this be a Ruby internals call rather than a JRUBY internals call?
-       SELF_METACLASS("self_metaClass"), // SSS FIXME: Should this be a Ruby internals call rather than a JRUBY internals call?
        SELF_HAS_INSTANCE_VARIABLE("self_hasInstanceVariable"), // SSS FIXME: Should this be a Ruby internals call rather than a JRUBY internals call?
        SELF_IS_METHOD_BOUND("self_isMethodBound"), // SSS FIXME: Should this be a Ruby internals call rather than a JRUBY internals call?
        TC_SAVE_ERR_INFO("threadContext_saveErrInfo"),
        TC_RESTORE_ERR_INFO("threadContext_restoreErrInfo"),
-       TC_GET_CONSTANT_DEFINED("threadContext_getConstantDefined"),
-       TC_GET_CURRENT_MODULE("threadContext_getCurrentModule"),
        BACKREF_IS_RUBY_MATCH_DATA("backref_isRubyMatchData"),
        METHOD_PUBLIC_ACCESSIBLE("methodIsPublicAccessible"),
        CLASS_VAR_DEFINED("isClassVarDefined"),
        FRAME_SUPER_METHOD_BOUND("frame_superMethodBound"),
        SET_WITHIN_DEFINED("setWithinDefined"),
        CHECK_ARITY("checkArity"),
+       RECORD_END_BLOCK("recordEndBlock"),
        RAISE_ARGUMENT_ERROR("raiseArgumentError");
 
        public MethAddr methAddr;
@@ -90,12 +92,12 @@ public class JRubyImplCallInstr extends CallInstr {
     JRubyImplementationMethod implMethod;
 
     public JRubyImplCallInstr(Variable result, JRubyImplementationMethod methAddr, Operand receiver, Operand[] args) {
-        super(Operation.JRUBY_IMPL, result, methAddr.getMethAddr(), receiver, args, null);
+        super(Operation.JRUBY_IMPL, CallType.FUNCTIONAL, result, methAddr.getMethAddr(), receiver, args, null);
         this.implMethod = methAddr;
     }
 
     public JRubyImplCallInstr(Variable result, JRubyImplementationMethod methAddr, Operand receiver, Operand[] args, Operand closure) {
-        super(result, methAddr.getMethAddr(), receiver, args, closure);
+        super(CallType.FUNCTIONAL, result, methAddr.getMethAddr(), receiver, args, closure);
         this.implMethod = methAddr;
     }
 
@@ -132,7 +134,7 @@ public class JRubyImplCallInstr extends CallInstr {
     public Instr cloneForInlining(InlinerInfo ii) {
         Operand receiver = getReceiver();
 
-        return new JRubyImplCallInstr(result == null ? null : ii.getRenamedVariable(result), this.implMethod,
+        return new JRubyImplCallInstr(getResult() == null ? null : ii.getRenamedVariable(getResult()), this.implMethod,
                 receiver == null ? null : receiver.cloneForInlining(ii), cloneCallArgs(ii),
                 closure == null ? null : closure.cloneForInlining(ii));
     }
@@ -189,9 +191,6 @@ public class JRubyImplCallInstr extends CallInstr {
                 // SSS: FIXME: Or use this directly? "context.getCurrentScope().getBackRef(rt)" What is the diff??
                 rVal = RuntimeHelpers.getBackref(runtime, context);
                 break;
-            case SELF_METACLASS:
-                rVal = ((IRubyObject)getReceiver().retrieve(interp, context, self)).getMetaClass();
-                break;
             case RAISE_ARGUMENT_ERROR:
             {
                 Operand[] args = getCallArgs();
@@ -222,14 +221,6 @@ public class JRubyImplCallInstr extends CallInstr {
                 break;
             case TC_RESTORE_ERR_INFO:
                 context.setErrorInfo((IRubyObject)getCallArgs()[0].retrieve(interp, context, self));
-                break;
-            case TC_GET_CONSTANT_DEFINED:
-                //name = getCallArgs()[0].retrieve(interp).toString();
-                name = ((StringLiteral)getCallArgs()[0])._str_value;
-                rVal = runtime.newBoolean(context.getConstantDefined(name));
-                break;
-            case TC_GET_CURRENT_MODULE:
-                rVal = context.getCurrentScope().getStaticScope().getModule();
                 break;
             case BACKREF_IS_RUBY_MATCH_DATA:
                 // bRef = getBackref()
@@ -266,6 +257,13 @@ public class JRubyImplCallInstr extends CallInstr {
                     }
                 }
                 rVal = runtime.newBoolean(flag);
+                break;
+            }
+            case RECORD_END_BLOCK: {
+                Operand [] args = getCallArgs();
+                IRScope topLevelScope = ((MetaObject)args[0]).getScope().getTopLevelScope();
+                IRScope  endBlock     = ((MetaObject)args[1]).getScope();
+                topLevelScope.recordEndBlock((IRClosure)endBlock);
                 break;
             }
             case FRAME_SUPER_METHOD_BOUND:

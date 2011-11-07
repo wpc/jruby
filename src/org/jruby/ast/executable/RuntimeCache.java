@@ -16,7 +16,6 @@ import org.jruby.common.IRubyWarnings.ID;
 import org.jruby.internal.runtime.methods.DynamicMethod;
 import org.jruby.internal.runtime.methods.UndefinedMethod;
 import org.jruby.javasupport.util.RuntimeHelpers;
-import org.jruby.parser.LocalStaticScope;
 import org.jruby.parser.StaticScope;
 import org.jruby.runtime.BlockBody;
 import org.jruby.runtime.CallSite;
@@ -37,7 +36,7 @@ public class RuntimeCache {
     public final StaticScope getScope(ThreadContext context, String varNamesDescriptor, int index) {
         StaticScope scope = scopes[index];
         if (scope == null) {
-            scopes[index] = scope = RuntimeHelpers.decodeScope(context, varNamesDescriptor);
+            scopes[index] = scope = RuntimeHelpers.decodeLocalScope(context, varNamesDescriptor);
         }
         return scope;
     }
@@ -159,6 +158,11 @@ public class RuntimeCache {
             regexp = RubyRegexp.newRegexp(runtime, pattern.getByteList(), RegexpOptions.fromEmbeddedOptions(options));
             regexps[index] = regexp;
         }
+        return regexp;
+    }
+
+    public final RubyRegexp cacheRegexp(int index, RubyRegexp regexp) {
+        regexps[index] = regexp;
         return regexp;
     }
 

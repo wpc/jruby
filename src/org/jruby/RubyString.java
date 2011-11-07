@@ -61,6 +61,7 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
 import java.nio.charset.CharsetEncoder;
 import java.nio.charset.CodingErrorAction;
+import java.nio.charset.UnsupportedCharsetException;
 import java.util.Arrays;
 import java.util.Locale;
 
@@ -77,9 +78,7 @@ import org.joni.Regex;
 import org.joni.Region;
 import org.jruby.anno.JRubyClass;
 import org.jruby.anno.JRubyMethod;
-import org.jruby.cext.RString;
 import org.jruby.javasupport.util.RuntimeHelpers;
-import org.jruby.runtime.Arity;
 import org.jruby.runtime.Block;
 import org.jruby.runtime.ClassIndex;
 import org.jruby.runtime.DynamicScope;
@@ -132,8 +131,6 @@ public class RubyString extends RubyObject implements EncodingCapable {
     private volatile int shareLevel = SHARE_LEVEL_NONE;
 
     private ByteList value;
-
-    private RString rstring;
 
     public static RubyClass createStringClass(Ruby runtime) {
         RubyClass stringClass = runtime.defineClass("String", runtime.getObject(), STRING_ALLOCATOR);
@@ -191,14 +188,6 @@ public class RubyString extends RubyObject implements EncodingCapable {
     public final void setCodeRange(int codeRange) {
         clearCodeRange();
         flags |= codeRange & CR_MASK;
-    }
-
-    public final RString getRString() {
-        return rstring;
-    }
-
-    public final void setRString(RString rstring) {
-        this.rstring = rstring;
     }
 
     public final void clearCodeRange() {
@@ -415,6 +404,11 @@ public class RubyString extends RubyObject implements EncodingCapable {
         this.value = value;
     }
 
+    public RubyString(Ruby runtime, RubyClass rubyClass, ByteList value, Encoding encoding, boolean objectSpace) {
+        this(runtime, rubyClass, value, objectSpace);
+        value.setEncoding(encoding);
+    }
+
     protected RubyString(Ruby runtime, RubyClass rubyClass, ByteList value, Encoding enc, int cr) {
         this(runtime, rubyClass, value);
         value.setEncoding(enc);
@@ -465,6 +459,10 @@ public class RubyString extends RubyObject implements EncodingCapable {
 
     public static RubyString newStringLight(Ruby runtime, int size) {
         return new RubyString(runtime, runtime.getString(), new ByteList(size), false);
+    }
+
+    public static RubyString newStringLight(Ruby runtime, int size, Encoding encoding) {
+        return new RubyString(runtime, runtime.getString(), new ByteList(size), encoding, false);
     }
   
     public static RubyString newString(Ruby runtime, CharSequence str) {
@@ -728,6 +726,10 @@ public class RubyString extends RubyObject implements EncodingCapable {
     public final RubyString makeSharedString(Ruby runtime, int index, int len) {
         return makeShared(runtime, runtime.getString(), index, len);
     }
+    
+    public RubyString makeSharedString19(Ruby runtime, int index, int len) {
+        return makeShared19(runtime, runtime.getString(), value, index, len);
+    }
 
     public final RubyString makeShared(Ruby runtime, int index, int len) {
         return makeShared(runtime, getType(), index, len);
@@ -755,9 +757,12 @@ public class RubyString extends RubyObject implements EncodingCapable {
     }
 
     private RubyString makeShared19(Ruby runtime, ByteList value, int index, int len) {
+        return makeShared19(runtime, getType(), value, index, len);
+    }
+    
+    private RubyString makeShared19(Ruby runtime, RubyClass meta, ByteList value, int index, int len) {
         final RubyString shared;
         Encoding enc = value.getEncoding();
-        RubyClass meta = getType();
 
         if (len == 0) {
             shared = newEmptyString(runtime, meta, enc);
@@ -771,7 +776,7 @@ public class RubyString extends RubyObject implements EncodingCapable {
         return shared;
     }
 
-    final void modifyCheck() {
+    public final void modifyCheck() {
         frozenCheck();
 
         if (!isTaint() && getRuntime().getSafeLevel() >= 4) {
@@ -859,7 +864,7 @@ public class RubyString extends RubyObject implements EncodingCapable {
         }
     }
 
-    final void view(ByteList bytes) {
+    public final void view(ByteList bytes) {
         modifyCheck();
 
         value = bytes;
@@ -1016,26 +1021,22 @@ public class RubyString extends RubyObject implements EncodingCapable {
         return invokedynamic(context, other, OP_EQUAL, this).isTrue() ? runtime.getTrue() : runtime.getFalse();
     }
 
-    @JRubyMethod(name = "+", required = 1, compat = RUBY1_8, argTypes = RubyString.class)
-    public IRubyObject op_plus(ThreadContext context, RubyString str) {
+    @JRubyMethod(name = "+", required = 1, compat = RUBY1_8)
+    public IRubyObject op_plus(ThreadContext context, IRubyObject _str) {
+        RubyString str = _str.convertToString();
         RubyString resultStr = newString(context.getRuntime(), addByteLists(value, str.value));
         resultStr.infectBy(flags | str.flags);
         return resultStr;
     }
-    public IRubyObject op_plus(ThreadContext context, IRubyObject other) {
-        return op_plus(context, other.convertToString());
-    }
 
     @JRubyMethod(name = "+", required = 1, compat = RUBY1_9)
-    public IRubyObject op_plus19(ThreadContext context, RubyString str) {
+    public IRubyObject op_plus19(ThreadContext context, IRubyObject _str) {
+        RubyString str = _str.convertToString();
         Encoding enc = checkEncoding(str);
         RubyString resultStr = newStringNoCopy(context.getRuntime(), addByteLists(value, str.value),
                                     enc, codeRangeAnd(getCodeRange(), str.getCodeRange()));
         resultStr.infectBy(flags | str.flags);
         return resultStr;
-    }
-    public IRubyObject op_plus19(ThreadContext context, IRubyObject other) {
-        return op_plus19(context, other.convertToString());
     }
 
     private ByteList addByteLists(ByteList value1, ByteList value2) {
@@ -1093,10 +1094,13 @@ public class RubyString extends RubyObject implements EncodingCapable {
         IRubyObject tmp = arg.checkArrayType();
         if (tmp.isNil()) tmp = arg;
 
+        ByteList out = new ByteList(value.getRealSize());
+        out.setEncoding(value.getEncoding());
+        
+        boolean tainted;
+        
         // FIXME: Should we make this work with platform's locale,
         // or continue hardcoding US?
-        ByteList out = new ByteList(value.getRealSize());
-        boolean tainted;
         switch (compat) {
         case RUBY1_8:
             tainted = Sprintf.sprintf(out, Locale.US, value, tmp);
@@ -1273,7 +1277,7 @@ public class RubyString extends RubyObject implements EncodingCapable {
             resCr = CR_UNKNOWN;
         } else if (toCr == CR_7BIT) {
             if (cr == CR_7BIT) {
-                resEnc = toEnc == ASCIIEncoding.INSTANCE ? toEnc : enc;
+                resEnc = toEnc != ASCIIEncoding.INSTANCE ? toEnc : enc;
                 resCr = CR_7BIT;
             } else {
                 resEnc = enc;
@@ -6825,6 +6829,7 @@ public class RubyString extends RubyObject implements EncodingCapable {
         ByteList val = value.shallowDup();
         int p = val.getBegin();
         int s = p;
+        int offset = p;
         int len = val.getRealSize();
         int end = p + len;
         byte[]bytes = val.getUnsafeBytes();
@@ -6838,7 +6843,7 @@ public class RubyString extends RubyObject implements EncodingCapable {
                     int p0 = enc.leftAdjustCharHead(bytes, s, p, end);
                     if (enc.isNewLine(bytes, p0, end)) {
                         p = p0 + StringSupport.length(enc, bytes, p0, end);
-                        block.yield(context, makeShared19(runtime, val, s, p - s).infectBy(this));
+                        block.yield(context, makeShared19(runtime, val, s - offset, p - s).infectBy(this));
                         s = p;
                         continue;
                     }
@@ -6868,7 +6873,7 @@ public class RubyString extends RubyObject implements EncodingCapable {
                     }
                     if (c == newLine && (rslen <= 1 ||
                             ByteList.memcmp(sepValue.getUnsafeBytes(), sepValue.getBegin(), rslen, bytes, p, rslen) == 0)) {
-                        block.yield(context, makeShared19(runtime, val, s, p - s + (rslen != 0 ? rslen : n)).infectBy(this));
+                        block.yield(context, makeShared19(runtime, val, s - offset, p - s + (rslen != 0 ? rslen : n)).infectBy(this));
                         s = p + (rslen != 0 ? rslen : n);
                     }
                     p += n;
@@ -6877,7 +6882,7 @@ public class RubyString extends RubyObject implements EncodingCapable {
         }
 
         if (s != end) {
-            block.yield(context, makeShared19(runtime, val, s, end - s).infectBy(this));
+            block.yield(context, makeShared19(runtime, val, s-offset, end - s).infectBy(this));
         }
         return this;
     }
@@ -7248,8 +7253,11 @@ public class RubyString extends RubyObject implements EncodingCapable {
     }
 
     private static Charset lookupCharsetFor(Ruby runtime, Encoding encoding, String fromName, String toName) {
-        Charset from = encoding.getCharset();
-        if (from != null) return from;
+        Charset from = null;
+        try {
+            from = encoding.getCharset();
+            if (from != null) return from;
+        } catch (Exception e) {}
 
         try { // We try looking up based on Java's supported charsets...likely missing charset entry in jcodings
             from = Charset.forName(encoding.toString());
@@ -7266,9 +7274,12 @@ public class RubyString extends RubyObject implements EncodingCapable {
      * forceEncoding as its encoding if it is supplied; otherwise it will use the encoding it has
      * tucked away in the bytelist.  This will return a new copy of a ByteList in the request
      * encoding or die trying (ConverterNotFound).
+     * 
+     * c: rb_str_conv_enc_opts
      */
     public static ByteList transcode(ThreadContext context, ByteList value, Encoding forceEncoding,
             Encoding toEncoding, IRubyObject opts) {
+        if (toEncoding == null) return value;
         Ruby runtime = context.getRuntime();
         Encoding fromEncoding = forceEncoding != null ? forceEncoding : value.getEncoding();
         Charset from = lookupCharsetFor(runtime, fromEncoding, fromEncoding.toString(), toEncoding.toString());

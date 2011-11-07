@@ -12,18 +12,18 @@ import org.jruby.runtime.Frame;
 import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.builtin.IRubyObject;
 
+import org.jruby.compiler.ir.IRExecutionScope;
 import org.jruby.compiler.ir.IRMethod;
-import org.jruby.compiler.ir.operands.Label;
 
 /**
  *
  * @author enebo
  */
 public class NaiveInterpreterContext implements InterpreterContext {
-    protected Object returnValue;
+    protected IRExecutionScope irScope;
     protected IRubyObject[] parameters;
+    protected Object returnValue;
     protected Object[] temporaryVariables;
-    protected Object[] localVariables;
     protected Frame frame;
     protected Block block;
     protected Block.Type blockType;
@@ -31,18 +31,17 @@ public class NaiveInterpreterContext implements InterpreterContext {
     protected boolean allocatedDynScope = false;
     protected Object currException = null;
 
-    private Label methodExitLabel = null;
-
     // currentModule is:
     // - self if we are executing a class method of 'self'
     // - self.getMetaClass() if we are executing an instance method of 'self'
     // - the class in which the closure is lexically defined in if we are executing a closure
-    public NaiveInterpreterContext(ThreadContext context, RubyModule currentModule, IRubyObject self, String name, int localVariablesSize, int temporaryVariablesSize, IRubyObject[] parameters, Block block, Block.Type blockType) {
-        context.preMethodFrameOnly(currentModule, name, self, block);
+    public NaiveInterpreterContext(ThreadContext context, IRExecutionScope irScope, RubyModule currentModule, IRubyObject self, String name, IRubyObject[] parameters, Block block, Block.Type blockType) {
+        this.irScope = irScope;
         this.frame = context.getCurrentFrame();
-
         this.parameters = parameters;
-        this.localVariables = localVariablesSize > 0 ? new Object[localVariablesSize] : null;
+        this.currDynScope = context.getCurrentScope();
+
+        int temporaryVariablesSize = irScope.getTemporaryVariableSize();
         this.temporaryVariables = temporaryVariablesSize > 0 ? new Object[temporaryVariablesSize] : null;
         this.block = block;
         // SSS FIXME: Can it happen that (block.type != blockType)?
@@ -63,25 +62,6 @@ public class NaiveInterpreterContext implements InterpreterContext {
 
     public void setBlock(Block block) {
         this.block = block;
-    }
-
-    public void setDynamicScope(DynamicScope s) {
-        this.currDynScope = s;
-    }
-
-    public void allocateSharedBindingScope(ThreadContext context, IRMethod method) {
-        this.allocatedDynScope = true;
-        this.currDynScope = new org.jruby.runtime.scope.SharedBindingDynamicScope(method.getStaticScope(), method);
-        context.pushScope(this.currDynScope);
-    }
-
-    public DynamicScope getSharedBindingScope() {
-        return this.currDynScope;
-    }
-
-    // SSS: Should get rid of this and add a FreeBinding instruction
-    public boolean hasAllocatedDynamicScope() {
-        return this.allocatedDynScope;
     }
 
     public Object getReturnValue(ThreadContext context) {
@@ -107,10 +87,7 @@ public class NaiveInterpreterContext implements InterpreterContext {
 
     // Post-inlining
     public void updateLocalVariablesCount(int n) {
-        // SSS FIXME: use System.arraycopy
-        Object[] oldLocalVars = this.localVariables;
-        this.localVariables = new Object[n];
-        System.arraycopy(oldLocalVars, 0, this.localVariables, 0, oldLocalVars.length);
+       // FIXME: Needs to be done.
     }
 
     public Object getSharedBindingVariable(ThreadContext context, int bindingSlot) {
@@ -123,17 +100,14 @@ public class NaiveInterpreterContext implements InterpreterContext {
         currDynScope.setValueDepthZero((IRubyObject)value, bindingSlot);
     }
 
-    public Object getLocalVariable(ThreadContext context, int offset) {
-        Object o = localVariables[offset];
-        return (o == null) ? context.getRuntime().getNil() : o;
+    public Object getLocalVariable(ThreadContext context, int depth, int offset) {
+        Object value = currDynScope.getValue(offset, depth);
+        return (value == null) ? context.getRuntime().getNil() : value;
     }
 
-    public Object setLocalVariable(int offset, Object value) {
-        Object oldValue = localVariables[offset];
-
-        localVariables[offset] = value;
-
-        return oldValue;
+    public Object setLocalVariable(int depth, int offset, Object value) {
+        currDynScope.setValue((IRubyObject)value, offset, depth); 
+        return null;
     }
 
     public IRubyObject[] setNewParameters(IRubyObject[] newParams) {
@@ -171,17 +145,12 @@ public class NaiveInterpreterContext implements InterpreterContext {
         return args;
     }
 
-    public void setMethodExitLabel(Label l) {
-        methodExitLabel = l;
-    }
-
-    public Label getMethodExitLabel() {
-        return methodExitLabel;
+    public IRExecutionScope getCurrentIRScope() {
+        return this.irScope;
     }
 
     // Set the most recently raised exception
     public void setException(Object e) {
-        // SSS FIXME: More things to be done besides this?
         currException = e;
     }
 

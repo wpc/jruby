@@ -48,7 +48,19 @@ RubyArray::RubyArray(JNIEnv* env, jobject obj_): Handle(env, obj_, T_ARRAY)
 
 RubyArray::~RubyArray()
 {
-    // See Java_org_jruby_cext_Native_freeRArray
+    RArray* rarray = rwdata.rarray;
+    if (rarray != NULL) {
+        free(rarray->ptr);
+        free(rarray);
+    }
+}
+
+void 
+RubyArray::markElements()
+{
+    if (rwdata.rarray != NULL && rwdata.rarray->ptr != NULL) {
+        rb_gc_mark_locations(rwdata.rarray->ptr, &rwdata.rarray->ptr[rwdata.rarray->len]);
+    }
 }
 
 static bool
@@ -93,7 +105,7 @@ RubyArray::toRArray(bool readonly)
     rwdata.nsync.sync = RubyArray_nsync;
     rwdata.clean.data = this;
     rwdata.clean.sync = RubyArray_clean;
-    rwdata.rarray = (RArray *) j2p(env->CallStaticLongMethod(JRuby_class, JRuby_getRArray, obj));
+    rwdata.rarray = (RArray *) calloc(1, sizeof(RArray));
     checkExceptions(env);
     rwdata.readonly = readonly;
 
@@ -435,5 +447,8 @@ rb_ary_freeze(VALUE ary)
 extern "C" VALUE
 rb_ary_to_ary(VALUE ary)
 {
-    return callMethod(ary, "to_ary", 0);
+    VALUE tmp = rb_check_array_type(ary);
+
+    if (!NIL_P(tmp)) return tmp;
+    return rb_ary_new3(1, ary);
 }

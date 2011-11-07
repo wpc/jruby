@@ -2,10 +2,10 @@ package org.jruby.ext.ffi.jffi;
 
 import java.io.PrintWriter;
 import org.objectweb.asm.ClassReader;
-import org.objectweb.asm.commons.EmptyVisitor;
 import org.jruby.compiler.impl.SkinnyMethodAdapter;
 import java.lang.reflect.Constructor;
 import java.util.concurrent.atomic.AtomicLong;
+import org.jruby.util.cli.Options;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.ClassWriter;
 
@@ -16,7 +16,7 @@ import static org.objectweb.asm.Opcodes.*;
  * 
  */
 final class AsmClassBuilder {
-    public static final boolean DEBUG = false || Boolean.getBoolean("jruby.ffi.compile.dump");
+    public static final boolean DEBUG = false || Options.FFI_COMPILE_DUMP.load();
     private static final AtomicLong nextClassID = new AtomicLong(0);
     private final JITSignature signature;
     private final ClassWriter classWriter;
@@ -120,7 +120,7 @@ final class AsmClassBuilder {
             Constructor<? extends ClassVisitor> c = tmvClass.getDeclaredConstructor(PrintWriter.class);
             return c.newInstance(out);
         } catch (Throwable t) {
-            return new EmptyVisitor();
+            return null;
         }
     }
 

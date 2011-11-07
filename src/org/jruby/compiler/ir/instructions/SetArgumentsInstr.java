@@ -8,6 +8,7 @@ import org.jruby.compiler.ir.representations.InlinerInfo;
 import org.jruby.interpreter.InterpreterContext;
 import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.javasupport.util.RuntimeHelpers;
+import org.jruby.ast.util.ArgsUtil;
 import org.jruby.RubyArray;
 import org.jruby.runtime.ThreadContext;
 
@@ -15,10 +16,11 @@ import org.jruby.runtime.ThreadContext;
 // tree of the form  |a,(b,(c,(d,..))),..| by pushing a argument array as we go up/down one level
 // of this assignment tree.
 public class SetArgumentsInstr extends OneOperandInstr {
-    public final boolean coerceToArray;
+    private final boolean coerceToArray;
 
     public SetArgumentsInstr(Variable dest, Variable newArgs, boolean coerceToArray) {
         super(Operation.SET_ARGS, dest, newArgs);
+        
         this.coerceToArray = coerceToArray;
     }
 
@@ -34,18 +36,21 @@ public class SetArgumentsInstr extends OneOperandInstr {
     @Interp
     @Override
     public Label interpret(InterpreterContext interp, ThreadContext context, IRubyObject self) {
+        Variable dest = getResult();
         Object o = getArg().retrieve(interp, context, self);
         if (coerceToArray) {
             // run to_ary and convert to java array
             if (!(o instanceof RubyArray)) o = RuntimeHelpers.aryToAry((IRubyObject)o);
             o = ((RubyArray)o).toJavaArray();
-        }
+        } else if (dest != null) {
+            if (!(o instanceof RubyArray)) o = ArgsUtil.convertToRubyArray(context.getRuntime(), (IRubyObject)o, false);
+            o = ((RubyArray)o).toJavaArray();
+		  }
 
         // Set new arguments
         IRubyObject[] origArgs = interp.setNewParameters((IRubyObject[])o);
 
         // Store it into the destination variable if we have a non-null variable
-        Variable dest = getResult();
         if (dest != null)
             dest.store(interp, context, self, origArgs);
 

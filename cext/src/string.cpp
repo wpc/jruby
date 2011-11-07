@@ -50,7 +50,11 @@ RubyString::RubyString(JNIEnv* env, jobject obj_): Handle(env, obj_, T_STRING)
 
 RubyString::~RubyString()
 {
-    // Ressources are freed in Java_org_jruby_cext_Native_freeRString
+    RString* rstring = rwdata.rstring;
+    if (rstring != NULL) {
+        free(rstring->ptr);
+        free(rstring);
+    }
 }
 
 int
@@ -110,7 +114,7 @@ RubyString::toRString(bool readonly)
     rwdata.nsync.sync = RubyString_nsync;
     rwdata.clean.data = this;
     rwdata.clean.sync = RubyString_clean;
-    rwdata.rstring = (RString *) j2p(env->CallStaticLongMethod(JRuby_class, JRuby_getRString, obj));
+    rwdata.rstring = (RString *) calloc(1, sizeof(RString));
     checkExceptions(env);
     rwdata.readonly = readonly;
 
@@ -235,6 +239,16 @@ rb_str_new_cstr(const char *ptr)
     }
 
     return newString(ptr, ptr ? strlen(ptr) : 0);
+}
+
+extern "C" VALUE
+rb_str_new4(VALUE str)
+{
+    if (callMethod(str, "frozen?", 0) == Qtrue) {
+	return str;
+    } else {
+	return rb_str_new_frozen(str);
+    }
 }
 
 #define STR_BUF_MIN_SIZE 1

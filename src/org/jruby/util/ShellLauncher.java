@@ -28,7 +28,6 @@
 
 package org.jruby.util;
 
-import com.kenai.jaffl.FFIProvider;
 import static java.lang.System.out;
 
 import java.io.BufferedInputStream;
@@ -48,7 +47,6 @@ import java.nio.channels.FileChannel;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -62,11 +60,11 @@ import org.jruby.RubyIO;
 import org.jruby.RubyInstanceConfig;
 import org.jruby.RubyModule;
 import org.jruby.RubyString;
-import org.jruby.ext.posix.POSIX;
-import org.jruby.ext.posix.util.FieldAccess;
-import org.jruby.ext.posix.util.Platform;
+import jnr.posix.POSIX;
+import jnr.posix.util.FieldAccess;
+import jnr.posix.util.Platform;
 import org.jruby.javasupport.util.RuntimeHelpers;
-import org.jruby.libraries.RbConfigLibrary;
+import org.jruby.ext.rbconfig.RbConfigLibrary;
 import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.util.io.ModeFlags;
@@ -597,8 +595,7 @@ public class ShellLauncher {
                                 return (Integer)UNIXProcess_pid.get(process);
                             } else if (ProcessImpl.isInstance(process)) {
                                 Long hproc = (Long) ProcessImpl_handle.get(process);
-                                return WindowsFFI.getKernel32(FFIProvider.getProvider())
-                                    .GetProcessId(new com.kenai.jaffl.NativeLong(hproc));
+                                return WindowsFFI.getKernel32().GetProcessId(hproc.intValue());
                             }
                         } catch (Exception e) {
                             // ignore and use hashcode
@@ -628,8 +625,7 @@ public class ShellLauncher {
                     try {
                         if (ProcessImpl.isInstance(process)) {
                             Long hproc = (Long) ProcessImpl_handle.get(process);
-                            return WindowsFFI.getKernel32(FFIProvider.getProvider())
-                                .GetProcessId(new com.kenai.jaffl.NativeLong(hproc));
+                            return WindowsFFI.getKernel32().GetProcessId(hproc.intValue());
                         }
 
                     } catch (Exception e) {
@@ -768,6 +764,7 @@ public class ShellLauncher {
 
     public static class POpenProcess extends Process {
         private final Process child;
+        private final boolean waitForChild;
 
         // real stream references, to keep them from being GCed prematurely
         private InputStream realInput;
@@ -782,14 +779,15 @@ public class ShellLauncher {
         private FileChannel inerrChannel;
         private Pumper inputPumper;
         private Pumper inerrPumper;
-        private Pumper outputPumper;
 
         public POpenProcess(Process child, Ruby runtime, ModeFlags modes) {
             this.child = child;
 
             if (modes.isWritable()) {
+                this.waitForChild = true;
                 prepareOutput(child);
             } else {
+                this.waitForChild = false;
                 // close process output
                 // See JRUBY-3405; hooking up to parent process stdin caused
                 // problems for IRB etc using stdin.
@@ -807,6 +805,7 @@ public class ShellLauncher {
 
         public POpenProcess(Process child) {
             this.child = child;
+            this.waitForChild = false;
 
             prepareOutput(child);
             prepareInput(child);
@@ -850,19 +849,7 @@ public class ShellLauncher {
 
         @Override
         public int waitFor() throws InterruptedException {
-            if (outputPumper == null) {
-                try {
-                    if (output != null) output.close();
-                } catch (IOException ioe) {
-                    // ignore, we're on the way out
-                }
-            } else {
-                outputPumper.quit();
-            }
-
-            int result = child.waitFor();
-
-            return result;
+            return child.waitFor();
         }
 
         @Override
@@ -883,13 +870,19 @@ public class ShellLauncher {
                 // processes seem to have some peculiar locking sequences, so we
                 // need to ensure nobody is trying to close/destroy while we are
                 synchronized (this) {
-                    RubyIO.obliterateProcess(child);
                     if (inputPumper != null) synchronized(inputPumper) {inputPumper.quit();}
                     if (inerrPumper != null) synchronized(inerrPumper) {inerrPumper.quit();}
-                    if (outputPumper != null) synchronized(outputPumper) {outputPumper.quit();}
+                    if (waitForChild) {
+                        waitFor();
+                    } else {
+                        RubyIO.obliterateProcess(child);
+                    }
                 }
             } catch (IOException ioe) {
                 throw new RuntimeException(ioe);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(ie);
             }
         }
 
@@ -926,7 +919,6 @@ public class ShellLauncher {
             } else {
                 outputChannel = null;
             }
-            outputPumper = null;
         }
 
         private void pumpInput(Process child, Ruby runtime) {

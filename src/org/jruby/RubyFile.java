@@ -49,6 +49,7 @@ import java.net.URL;
 import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
+import java.util.Enumeration;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
@@ -58,8 +59,8 @@ import org.jcodings.specific.ASCIIEncoding;
 import org.jruby.anno.JRubyClass;
 import org.jruby.anno.JRubyMethod;
 import org.jruby.anno.JRubyModule;
-import org.jruby.ext.posix.FileStat;
-import org.jruby.ext.posix.util.Platform;
+import jnr.posix.FileStat;
+import jnr.posix.util.Platform;
 import org.jruby.runtime.Block;
 import org.jruby.runtime.ClassIndex;
 import org.jruby.runtime.ObjectAllocator;
@@ -1836,12 +1837,24 @@ public class RubyFile extends RubyIO implements EncodingCapable {
     }
 
     public static ZipEntry getDirOrFileEntry(ZipFile zf, String path) throws IOException {
-        ZipEntry entry = zf.getEntry(path + "/"); // first try as directory
+        String dirPath = path + "/";
+        ZipEntry entry = zf.getEntry(dirPath); // first try as directory
         if (entry == null) {
             // try canonicalizing the path to eliminate . and .. (JRUBY-4760, JRUBY-4879)
             String prefix = new File(".").getCanonicalPath();
-            entry = zf.getEntry(new File(path + "/").getCanonicalPath().substring(prefix.length() + 1).replaceAll("\\\\", "/"));
+            entry = zf.getEntry(new File(dirPath).getCanonicalPath().substring(prefix.length() + 1).replaceAll("\\\\", "/"));
 
+            // JRUBY-6119
+            if (entry == null) {
+                Enumeration<? extends ZipEntry> entries = zf.entries();
+                while (entries.hasMoreElements()) {
+                    String zipEntry = entries.nextElement().getName();
+                    if (zipEntry.startsWith(dirPath)) {
+                        return new ZipEntry(dirPath);
+                    }
+                }
+            }
+            
             if (entry == null) {
                 // try as file
                 entry = getFileEntry(zf, path);
