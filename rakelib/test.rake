@@ -4,6 +4,9 @@ task :test => "test:short"
 desc "Alias for spec:ci"
 task :spec => "spec:ci"
 
+desc "Run the suite of tests in 1.9 mode"
+task :test19 => ['test:jruby19', 'test:mri19', 'test:rubicon19']
+
 namespace :test do
   desc "Compile test code"
   task :compile do
@@ -32,15 +35,16 @@ namespace :test do
       t.pattern = 'test/tracing/test_*.rb'
       t.verbose = true
       t.ruby_opts << '--debug'
+      t.ruby_opts << '--1.8'
     end
   end
   desc "Run tracing tests (do not forget to pass --debug)"
 
-  task :mri19 do
+  task :mri19 => ['install_dev_gems'] do
     require 'rake/testtask'
     Rake::TestTask.new('test:mri19') do |t|
       files = []
-      File.open('test/ruby_1_9_index') do |f|
+      File.open('test/mri.1.9.index') do |f|
         f.lines.each do |line|
           filename = "test/#{line.chomp}.rb"
           next unless File.exist? filename
@@ -48,7 +52,6 @@ namespace :test do
         end
       end
       t.test_files = files
-      p files
       t.verbose = true
       ENV['EXCLUDE_DIR'] = 'test/externals/ruby1.9/excludes'
       t.ruby_opts << '--debug'
@@ -59,6 +62,46 @@ namespace :test do
     end
   end
 
+  task :jruby19 => ['test:compile', :install_dev_gems] do
+    require 'rake/testtask'
+    Rake::TestTask.new('test:jruby19') do |t|
+      files = []
+      File.open('test/jruby.1.9.index') do |f|
+        f.lines.each do |line|
+          filename = "test/#{line.chomp}.rb"
+          next unless File.exist? filename
+          files << filename
+        end
+      end
+      t.test_files = files
+      t.verbose = true
+      t.ruby_opts << '-J-cp build/classes/test'
+      t.ruby_opts << '--debug'
+      t.ruby_opts << '--1.9'
+      t.ruby_opts << '-X-C'
+    end
+  end
+
+  task :rubicon19 => ['test:compile', :install_dev_gems] do
+    require 'rake/testtask'
+    Rake::TestTask.new('test:rubicon19') do |t|
+      files = []
+      File.open('test/rubicon.1.9.index') do |f|
+        f.lines.each do |line|
+          filename = "test/#{line.chomp}.rb"
+          next unless File.exist? filename
+          files << filename
+        end
+      end
+      t.test_files = files
+      t.verbose = true
+      t.ruby_opts << '-J-cp build/classes/test'
+      t.ruby_opts << '--debug'
+      t.ruby_opts << '--1.9'
+      t.ruby_opts << '-X-C'
+      t.ruby_opts << '-X+O'
+    end
+  end
 
   task :rails => [:jar, :install_build_gems, :fetch_latest_rails_repo] do
     # Need to disable assertions because of a rogue assert in OpenSSL

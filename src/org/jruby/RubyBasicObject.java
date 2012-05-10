@@ -1004,16 +1004,20 @@ public class RubyBasicObject implements Cloneable, IRubyObject, Serializable, Co
      * in serial, and guaranteed unique for up to 2^63 objects. The special
      * objectId slot is managed separately from the "normal" vars so it
      * does not marshal, clone/dup, or refuse to be initially set when the
+     * object is frozen.
      */
-    protected synchronized long getObjectId() {
-        // object is frozen.
+    protected long getObjectId() {
+        RubyClass realClass = metaClass.getRealClass();
+        RubyClass.VariableAccessor objectIdAccessor = realClass.getObjectIdAccessorForRead();
+        Long id = (Long)objectIdAccessor.get(this);
+        if (id != null) return id;
+        
         synchronized (this) {
-            RubyClass.VariableAccessor objectIdAccessor = getMetaClass().getRealClass().getObjectIdAccessorForWrite();
-            Long id = (Long)objectIdAccessor.get(this);
-            if (id == null) {
-                return initObjectId(objectIdAccessor);
-            }
-            return id.longValue();
+            objectIdAccessor = realClass.getObjectIdAccessorForRead();
+            id = (Long)objectIdAccessor.get(this);
+            if (id != null) return id;
+
+            return initObjectId(realClass.getObjectIdAccessorForWrite());
         }
     }
 
@@ -1149,9 +1153,9 @@ public class RubyBasicObject implements Cloneable, IRubyObject, Serializable, Co
      *
      * The name of this method doesn't follow the convention because hierarchy problems
      */
-    @JRubyMethod(name = "==", required = 1, compat = RUBY1_9)
+    @JRubyMethod(name = "==", compat = RUBY1_9)
     public IRubyObject op_equal_19(ThreadContext context, IRubyObject obj) {
-        return this == obj ? context.getRuntime().getTrue() : context.getRuntime().getFalse();
+        return this == obj ? context.runtime.getTrue() : context.runtime.getFalse();
     }
 
     public IRubyObject op_eqq(ThreadContext context, IRubyObject other) {
@@ -1292,9 +1296,9 @@ public class RubyBasicObject implements Cloneable, IRubyObject, Serializable, Co
             Object[] newTable;
 
             if (myVarTable == null) {
-                newTable = new Object[getMetaClass().getRealClass().getVariableTableSizeWithExtras()];
+                newTable = new Object[metaClass.getRealClass().getVariableTableSizeWithExtras()];
             } else if (myVarTable.length <= index) {
-                newTable = new Object[getMetaClass().getRealClass().getVariableTableSizeWithExtras()];
+                newTable = new Object[metaClass.getRealClass().getVariableTableSizeWithExtras()];
                 System.arraycopy(myVarTable, 0, newTable, 0, myVarTable.length);
             } else {
                 return myVarTable;
@@ -1333,6 +1337,16 @@ public class RubyBasicObject implements Cloneable, IRubyObject, Serializable, Co
 
     public final void setNativeHandle(Object value) {
         int index = getMetaClass().getRealClass().getNativeHandleAccessorForWrite().getIndex();
+        Object[] ivarTable = getVariableTableForWrite(index);
+        ivarTable[index] = value;
+    }
+
+    public final Object getFFIHandle() {
+        return getMetaClass().getRealClass().getFFIHandleAccessorForRead().get(this);
+    }
+
+    public final void setFFIHandle(Object value) {
+        int index = getMetaClass().getRealClass().getFFIHandleAccessorForWrite().getIndex();
         Object[] ivarTable = getVariableTableForWrite(index);
         ivarTable[index] = value;
     }

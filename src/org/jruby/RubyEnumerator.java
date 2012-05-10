@@ -161,6 +161,19 @@ public class RubyEnumerator extends RubyObject {
         return initialize(args[0], args[1], methArgs);
     }
 
+    @JRubyMethod(name = "initialize", rest = true, visibility = PRIVATE, compat = RUBY1_9)
+    public IRubyObject initialize19(ThreadContext context, IRubyObject[] args, Block block) {
+        switch (args.length) {
+            case 0: return initialize19(context, block);
+            case 1: return initialize19(context, args[0], block);
+            case 2: return initialize19(context, args[0], args[1], block);
+        }
+
+        IRubyObject[] methArgs = new IRubyObject[args.length - 2];
+        System.arraycopy(args, 2, methArgs, 0, methArgs.length);
+        return initialize(args[0], args[1], methArgs);
+    }
+
     private IRubyObject initialize(IRubyObject object, IRubyObject method, IRubyObject[] methodArgs) {
         this.object = object;
         this.method = method.asJavaString();
@@ -253,22 +266,22 @@ public class RubyEnumerator extends RubyObject {
 
     public static final class RubyEnumeratorKernel {
         @JRubyMethod(name = {"to_enum", "enum_for"})
-        public static IRubyObject obj_to_enum(ThreadContext context, IRubyObject self, Block block) {
+        public static IRubyObject obj_to_enum(ThreadContext context, IRubyObject self) {
             return newEnumerator(context, self);
         }
 
         @JRubyMethod(name = {"to_enum", "enum_for"})
-        public static IRubyObject obj_to_enum(ThreadContext context, IRubyObject self, IRubyObject arg, Block block) {
+        public static IRubyObject obj_to_enum(ThreadContext context, IRubyObject self, IRubyObject arg) {
             return newEnumerator(context, self, arg);
         }
 
         @JRubyMethod(name = {"to_enum", "enum_for"})
-        public static IRubyObject obj_to_enum(ThreadContext context, IRubyObject self, IRubyObject arg0, IRubyObject arg1, Block block) {
+        public static IRubyObject obj_to_enum(ThreadContext context, IRubyObject self, IRubyObject arg0, IRubyObject arg1) {
             return newEnumerator(context, self, arg0, arg1);
         }
 
         @JRubyMethod(name = {"to_enum", "enum_for"}, optional = 1, rest = true)
-        public static IRubyObject obj_to_enum(ThreadContext context, IRubyObject self, IRubyObject[] args, Block block) {
+        public static IRubyObject obj_to_enum(ThreadContext context, IRubyObject self, IRubyObject[] args) {
             IRubyObject[] newArgs = new IRubyObject[args.length + 1];
             newArgs[0] = self;
             System.arraycopy(args, 0, newArgs, 1, args.length);

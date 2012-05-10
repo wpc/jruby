@@ -28,17 +28,15 @@
  ***** END LICENSE BLOCK *****/
 package org.jruby.runtime.invokedynamic;
 
-import java.lang.invoke.CallSite;
-import java.lang.invoke.MethodHandle;
+import java.lang.invoke.*;
+
 import static java.lang.invoke.MethodHandles.*;
-import java.lang.invoke.MethodType;
 import static java.lang.invoke.MethodType.*;
-import java.lang.invoke.MutableCallSite;
-import java.lang.invoke.SwitchPoint;
+
 import java.math.BigInteger;
 import java.util.Arrays;
 
-import com.headius.invoke.binder.Binder;
+import com.headius.invokebinder.Binder;
 import org.jruby.Ruby;
 import org.jruby.RubyBasicObject;
 import org.jruby.RubyBoolean;
@@ -52,6 +50,8 @@ import org.jruby.RubyString;
 import org.jruby.exceptions.JumpException;
 import org.jruby.exceptions.RaiseException;
 import org.jruby.exceptions.Unrescuable;
+import org.jruby.ext.ffi.jffi.JITNativeInvoker;
+import org.jruby.ext.ffi.jffi.NativeInvoker;
 import org.jruby.internal.runtime.methods.AliasMethod;
 import org.jruby.internal.runtime.methods.AttrReaderMethod;
 import org.jruby.internal.runtime.methods.AttrWriterMethod;
@@ -60,6 +60,7 @@ import org.jruby.internal.runtime.methods.CompiledMethod;
 import org.jruby.internal.runtime.methods.DefaultMethod;
 import org.jruby.internal.runtime.methods.DynamicMethod;
 import org.jruby.internal.runtime.methods.JittedMethod;
+import org.jruby.java.invokers.SingletonMethodInvoker;
 import org.jruby.javasupport.JavaUtil;
 import org.jruby.javasupport.proxy.InternalJavaProxy;
 import org.jruby.runtime.Block;
@@ -80,40 +81,40 @@ import static org.jruby.runtime.invokedynamic.InvokeDynamicSupport.*;
 public class InvocationLinker {
     private static final Logger LOG = LoggerFactory.getLogger("InvocationLinker");
     
-    public static CallSite invocationBootstrap(Lookup lookup, String name, MethodType type) throws NoSuchMethodException, IllegalAccessException {
-        CallSite site;
+    public static CallSite invocationBootstrap(Lookup lookup, String name, MethodType type, String file, int line) throws NoSuchMethodException, IllegalAccessException {
         String[] names = name.split(":");
         String operation = names[0];
 
         if (name.equals("yieldSpecific")) {
-            site = new MutableCallSite(type);
+            CallSite site = new MutableCallSite(type);
             MethodHandle target = lookup.findStatic(InvocationLinker.class, "yieldSpecificFallback", type.insertParameterTypes(0, MutableCallSite.class));
             target = insertArguments(target, 0, site);
             site.setTarget(target);
             return site;
         }
-        
+
+        JRubyCallSite site;
         String method = JavaNameMangler.demangleMethodName(names[1]);
         if (operation.equals("call")) {
-            site = new JRubyCallSite(lookup, type, CallType.NORMAL, method, false, false, true);
+            site = new JRubyCallSite(lookup, type, CallType.NORMAL, file, line, method, false, false, true);
         } else if (operation.equals("fcall")) {
-            site = new JRubyCallSite(lookup, type, CallType.FUNCTIONAL, method, false, false, true);
+            site = new JRubyCallSite(lookup, type, CallType.FUNCTIONAL, file, line, method, false, false, true);
         } else if (operation.equals("vcall")) {
-            site = new JRubyCallSite(lookup, type, CallType.VARIABLE, method, false, false, true);
+            site = new JRubyCallSite(lookup, type, CallType.VARIABLE, file, line, method, false, false, true);
         } else if (operation.equals("callIter")) {
-            site = new JRubyCallSite(lookup, type, CallType.NORMAL, method, false, true, true);
+            site = new JRubyCallSite(lookup, type, CallType.NORMAL, file, line, method, false, true, true);
         } else if (operation.equals("fcallIter")) {
-            site = new JRubyCallSite(lookup, type, CallType.FUNCTIONAL, method, false, true, true);
+            site = new JRubyCallSite(lookup, type, CallType.FUNCTIONAL, file, line, method, false, true, true);
         } else if (operation.equals("vcallIter")) {
-            site = new JRubyCallSite(lookup, type, CallType.VARIABLE, method, false, true, true);
+            site = new JRubyCallSite(lookup, type, CallType.VARIABLE, file, line, method, false, true, true);
         } else if (operation.equals("attrAssign")) {
-            site = new JRubyCallSite(lookup, type, CallType.NORMAL, method, true, false, false);
+            site = new JRubyCallSite(lookup, type, CallType.NORMAL, file, line, method, true, false, false);
         } else if (operation.equals("attrAssignSelf")) {
-            site = new JRubyCallSite(lookup, type, CallType.VARIABLE, method, true, false, false);
+            site = new JRubyCallSite(lookup, type, CallType.VARIABLE, file, line, method, true, false, false);
         } else if (operation.equals("attrAssignExpr")) {
-            site = new JRubyCallSite(lookup, type, CallType.NORMAL, method, true, false, true);
+            site = new JRubyCallSite(lookup, type, CallType.NORMAL, file, line, method, true, false, true);
         } else if (operation.equals("attrAssignSelfExpr")) {
-            site = new JRubyCallSite(lookup, type, CallType.VARIABLE, method, true, false, true);
+            site = new JRubyCallSite(lookup, type, CallType.VARIABLE, file, line, method, true, false, true);
         } else {
             throw new RuntimeException("wrong invokedynamic target: " + name);
         }
@@ -124,7 +125,8 @@ public class InvocationLinker {
                 fallbackType),
                 0,
                 site);
-        site.setTarget(myFallback);
+
+        site.setInitialTarget(myFallback);
         return site;
     }
     
@@ -134,6 +136,7 @@ public class InvocationLinker {
             IRubyObject self) throws Throwable {
         RubyClass selfClass = pollAndGetClass(context, self);
         String method = site.name();
+        SwitchPoint switchPoint = (SwitchPoint)selfClass.getInvalidator().getData();
         CacheEntry entry = selfClass.searchWithCache(method);
         
         if (methodMissing(entry, site.callType(), method, caller)) {
@@ -141,7 +144,7 @@ public class InvocationLinker {
         }
         
         MethodHandle target = getTarget(site, selfClass, method, entry, 0);
-        target = updateInvocationTarget(target, site, selfClass, method, entry, false, 0);
+        target = updateInvocationTarget(target, site, selfClass, method, entry, switchPoint, false, 0);
 
         return (IRubyObject)target.invokeWithArguments(context, caller, self);
     }
@@ -149,6 +152,7 @@ public class InvocationLinker {
     public static IRubyObject invocationFallback(JRubyCallSite site, ThreadContext context, IRubyObject caller, IRubyObject self, IRubyObject arg0) throws Throwable {
         RubyClass selfClass = pollAndGetClass(context, self);
         String method = site.name();
+        SwitchPoint switchPoint = (SwitchPoint)selfClass.getInvalidator().getData();
         CacheEntry entry = selfClass.searchWithCache(method);
         if (methodMissing(entry, site.callType(), method, caller)) {
             IRubyObject mmResult = callMethodMissing(entry, site.callType(), context, self, method, arg0);
@@ -157,7 +161,7 @@ public class InvocationLinker {
         }
         
         MethodHandle target = getTarget(site, selfClass, method, entry, 1);
-        target = updateInvocationTarget(target, site, selfClass, method, entry, false, 1);
+        target = updateInvocationTarget(target, site, selfClass, method, entry, switchPoint, false, 1);
 
         return (IRubyObject)target.invokeWithArguments(context, caller, self, arg0);
     }
@@ -165,6 +169,7 @@ public class InvocationLinker {
     public static IRubyObject invocationFallback(JRubyCallSite site, ThreadContext context, IRubyObject caller, IRubyObject self, IRubyObject arg0, IRubyObject arg1) throws Throwable {
         RubyClass selfClass = pollAndGetClass(context, self);
         String method = site.name();
+        SwitchPoint switchPoint = (SwitchPoint)selfClass.getInvalidator().getData();
         CacheEntry entry = selfClass.searchWithCache(method);
         if (methodMissing(entry, site.callType(), method, caller)) {
             IRubyObject mmResult = callMethodMissing(entry, site.callType(), context, self, method, arg0, arg1);
@@ -173,7 +178,7 @@ public class InvocationLinker {
         }
         
         MethodHandle target = getTarget(site, selfClass, method, entry, 2);
-        target = updateInvocationTarget(target, site, selfClass, method, entry, false, 2);
+        target = updateInvocationTarget(target, site, selfClass, method, entry, switchPoint, false, 2);
 
         return (IRubyObject)target.invokeWithArguments(context, caller, self, arg0, arg1);
     }
@@ -181,6 +186,7 @@ public class InvocationLinker {
     public static IRubyObject invocationFallback(JRubyCallSite site, ThreadContext context, IRubyObject caller, IRubyObject self, IRubyObject arg0, IRubyObject arg1, IRubyObject arg2) throws Throwable {
         RubyClass selfClass = pollAndGetClass(context, self);
         String method = site.name();
+        SwitchPoint switchPoint = (SwitchPoint)selfClass.getInvalidator().getData();
         CacheEntry entry = selfClass.searchWithCache(method);
         if (methodMissing(entry, site.callType(), method, caller)) {
             IRubyObject mmResult = callMethodMissing(entry, site.callType(), context, self, method, arg0, arg1, arg2);
@@ -189,7 +195,7 @@ public class InvocationLinker {
         }
         
         MethodHandle target = getTarget(site, selfClass, method, entry, 3);
-        target = updateInvocationTarget(target, site, selfClass, method, entry, false, 3);
+        target = updateInvocationTarget(target, site, selfClass, method, entry, switchPoint, false, 3);
 
         return (IRubyObject)target.invokeWithArguments(context, caller, self, arg0, arg1, arg2);
     }
@@ -197,6 +203,7 @@ public class InvocationLinker {
     public static IRubyObject invocationFallback(JRubyCallSite site, ThreadContext context, IRubyObject caller, IRubyObject self, IRubyObject[] args) throws Throwable {
         RubyClass selfClass = pollAndGetClass(context, self);
         String method = site.name();
+        SwitchPoint switchPoint = (SwitchPoint)selfClass.getInvalidator().getData();
         CacheEntry entry = selfClass.searchWithCache(method);
         if (methodMissing(entry, site.callType(), method, caller)) {
             IRubyObject mmResult = callMethodMissing(entry, site.callType(), context, self, method, args);
@@ -205,7 +212,7 @@ public class InvocationLinker {
         }
         
         MethodHandle target = getTarget(site, selfClass, method, entry, -1);
-        target = updateInvocationTarget(target, site, selfClass, method, entry, false, 4);
+        target = updateInvocationTarget(target, site, selfClass, method, entry, switchPoint, false, 4);
 
         return (IRubyObject)target.invokeWithArguments(context, caller, self, args);
     }
@@ -213,6 +220,7 @@ public class InvocationLinker {
     public static IRubyObject invocationFallback(JRubyCallSite site, ThreadContext context, IRubyObject caller, IRubyObject self, Block block) throws Throwable {
         RubyClass selfClass = pollAndGetClass(context, self);
         String method = site.name();
+        SwitchPoint switchPoint = (SwitchPoint)selfClass.getInvalidator().getData();
         CacheEntry entry = selfClass.searchWithCache(method);
 
         if (methodMissing(entry, site.callType(), method, caller)) {
@@ -228,7 +236,7 @@ public class InvocationLinker {
         }
 
         MethodHandle target = getTarget(site, selfClass, method, entry, 0);
-        target = updateInvocationTarget(target, site, selfClass, method, entry, true, 0);
+        target = updateInvocationTarget(target, site, selfClass, method, entry, switchPoint, true, 0);
 
         return (IRubyObject) target.invokeWithArguments(context, caller, self, block);
     }
@@ -236,6 +244,7 @@ public class InvocationLinker {
     public static IRubyObject invocationFallback(JRubyCallSite site, ThreadContext context, IRubyObject caller, IRubyObject self, IRubyObject arg0, Block block) throws Throwable {
         RubyClass selfClass = pollAndGetClass(context, self);
         String method = site.name();
+        SwitchPoint switchPoint = (SwitchPoint)selfClass.getInvalidator().getData();
         CacheEntry entry = selfClass.searchWithCache(method);
 
         if (methodMissing(entry, site.callType(), method, caller)) {
@@ -251,7 +260,7 @@ public class InvocationLinker {
         }
 
         MethodHandle target = getTarget(site, selfClass, method, entry, 1);
-        target = updateInvocationTarget(target, site, selfClass, method, entry, true, 1);
+        target = updateInvocationTarget(target, site, selfClass, method, entry, switchPoint, true, 1);
 
         return (IRubyObject) target.invokeWithArguments(context, caller, self, arg0, block);
     }
@@ -259,6 +268,7 @@ public class InvocationLinker {
     public static IRubyObject invocationFallback(JRubyCallSite site, ThreadContext context, IRubyObject caller, IRubyObject self, IRubyObject arg0, IRubyObject arg1, Block block) throws Throwable {
         RubyClass selfClass = pollAndGetClass(context, self);
         String method = site.name();
+        SwitchPoint switchPoint = (SwitchPoint)selfClass.getInvalidator().getData();
         CacheEntry entry = selfClass.searchWithCache(method);
 
         if (methodMissing(entry, site.callType(), method, caller)) {
@@ -274,7 +284,7 @@ public class InvocationLinker {
         }
 
         MethodHandle target = getTarget(site, selfClass, method, entry, 2);
-        target = updateInvocationTarget(target, site, selfClass, method, entry, true, 2);
+        target = updateInvocationTarget(target, site, selfClass, method, entry, switchPoint, true, 2);
 
         return (IRubyObject) target.invokeWithArguments(context, caller, self, arg0, arg1, block);
     }
@@ -282,6 +292,7 @@ public class InvocationLinker {
     public static IRubyObject invocationFallback(JRubyCallSite site, ThreadContext context, IRubyObject caller, IRubyObject self, IRubyObject arg0, IRubyObject arg1, IRubyObject arg2, Block block) throws Throwable {
         RubyClass selfClass = pollAndGetClass(context, self);
         String method = site.name();
+        SwitchPoint switchPoint = (SwitchPoint)selfClass.getInvalidator().getData();
         CacheEntry entry = selfClass.searchWithCache(method);
 
         if (methodMissing(entry, site.callType(), method, caller)) {
@@ -297,7 +308,7 @@ public class InvocationLinker {
         }
 
         MethodHandle target = getTarget(site, selfClass, method, entry, 3);
-        target = updateInvocationTarget(target, site, selfClass, method, entry, true, 3);
+        target = updateInvocationTarget(target, site, selfClass, method, entry, switchPoint, true, 3);
 
         return (IRubyObject) target.invokeWithArguments(context, caller, self, arg0, arg1, arg2, block);
     }
@@ -305,6 +316,7 @@ public class InvocationLinker {
     public static IRubyObject invocationFallback(JRubyCallSite site, ThreadContext context, IRubyObject caller, IRubyObject self, IRubyObject[] args, Block block) throws Throwable {
         RubyClass selfClass = pollAndGetClass(context, self);
         String method = site.name();
+        SwitchPoint switchPoint = (SwitchPoint)selfClass.getInvalidator().getData();
         CacheEntry entry = selfClass.searchWithCache(method);
 
         if (methodMissing(entry, site.callType(), method, caller)) {
@@ -320,7 +332,7 @@ public class InvocationLinker {
         }
 
         MethodHandle target = getTarget(site, selfClass, method, entry, -1);
-        target = updateInvocationTarget(target, site, selfClass, method, entry, true, 4);
+        target = updateInvocationTarget(target, site, selfClass, method, entry, switchPoint, true, 4);
 
         return (IRubyObject) target.invokeWithArguments(context, caller, self, args, block);
     }
@@ -330,7 +342,7 @@ public class InvocationLinker {
      * guard and argument-juggling logic. Return a handle suitable for invoking
      * with the site's original method type.
      */
-    private static MethodHandle updateInvocationTarget(MethodHandle target, JRubyCallSite site, RubyModule selfClass, String name, CacheEntry entry, boolean block, int arity) {
+    private static MethodHandle updateInvocationTarget(MethodHandle target, JRubyCallSite site, RubyModule selfClass, String name, CacheEntry entry, SwitchPoint switchPoint, boolean block, int arity) {
         if (target == null ||
                 site.clearCount() > RubyInstanceConfig.MAX_FAIL_COUNT ||
                 (!site.hasSeenType(selfClass.id)
@@ -344,24 +356,25 @@ public class InvocationLinker {
             MethodHandle gwt;
 
             // if we've cached no types, and the site is bound and we haven't seen this new type...
-            if (site.seenTypes().size() > 0 && site.getTarget() != null && !site.hasSeenType(selfClass.id)) {
+            if (site.seenTypesCount() > 0 && site.getTarget() != null && !site.hasSeenType(selfClass.id)) {
                 // stack it up into a PIC
-                if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(name + "\tadded to PIC (#" +entry.method.getSerialNumber() + ")");
+                if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(name + "\tadded to PIC " + logMethod(entry.method));
                 fallback = site.getTarget();
                 curry = false;
             } else {
                 // wipe out site with this new type and method
-                if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(name + "\ttriggered site rebind (#" +entry.method.getSerialNumber() + ")");
+                String bind = site.boundOnce() ? "rebind" : "bind";
+                if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(name + "\ttriggered site #" + site.siteID() + " " + bind + " (" + site.file() + ":" + site.line() + ")");
                 fallback = (block?FALLBACKS_B:FALLBACKS)[arity];
                 site.clearTypes();
                 curry = true;
             }
+
             site.addType(selfClass.id);
             gwt = createGWT(selfClass, (block?TESTS_B:TESTS)[arity], target, fallback, entry, site, curry);
             
             if (RubyInstanceConfig.INVOKEDYNAMIC_INVOCATION_SWITCHPOINT) {
                 // wrap in switchpoint for mutation invalidation
-                SwitchPoint switchPoint = (SwitchPoint)selfClass.getInvalidator().getData();
                 gwt = switchPoint.guardWithTest(gwt, curry ? insertArguments(fallback, 0, site) : fallback);
             }
             
@@ -406,7 +419,7 @@ public class InvocationLinker {
     }
 
     private static MethodHandle createFail(MethodHandle fail, JRubyCallSite site, String name, DynamicMethod method) {
-        if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(name + "\tbound to inline cache (failed #" + method.getSerialNumber() + ")");
+        if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(name + "\tbound to inline cache failed " + logMethod(method));
         
         MethodHandle myFail = insertArguments(fail, 0, site);
         myFail = postProcess(site, myFail);
@@ -429,45 +442,71 @@ public class InvocationLinker {
             super(reason);
         }
     }
-    
+
     private static MethodHandle tryDispatchDirect(JRubyCallSite site, String name, RubyClass cls, DynamicMethod method) {
         // get the "real" method in a few ways
         while (method instanceof AliasMethod) method = method.getRealMethod();
         if (method instanceof DefaultMethod) {
-            DefaultMethod defaultMethod = (DefaultMethod)method;
+            DefaultMethod defaultMethod = (DefaultMethod) method;
             if (defaultMethod.getMethodForCaching() instanceof JittedMethod) {
                 method = defaultMethod.getMethodForCaching();
             }
         }
-        
+
         DynamicMethod.NativeCall nativeCall = method.getNativeCall();
-        
-        MethodType trimmed = site.type().dropParameterTypes(2, 3);
-        int siteArgCount = getArgCount(trimmed.parameterArray(), true);
-        
+
+        int siteArgCount = getSiteCount(site.type().parameterArray());
+
         if (method instanceof AttrReaderMethod) {
             // attr reader
+            if (!RubyInstanceConfig.INVOKEDYNAMIC_ATTR) {
+                throw new IndirectBindingException("direct attribute dispatch not enabled");
+            }
             if (siteArgCount != 0) {
                 throw new IndirectBindingException("attr reader with > 0 args");
             }
         } else if (method instanceof AttrWriterMethod) {
             // attr writer
+            if (!RubyInstanceConfig.INVOKEDYNAMIC_ATTR) {
+                throw new IndirectBindingException("direct attribute dispatch not enabled");
+            }
             if (siteArgCount != 1) {
                 throw new IndirectBindingException("attr writer with > 1 args");
             }
-        } else if (nativeCall != null) {
-            // has an explicit native call path
-            
+
+        } else if (method instanceof org.jruby.ext.ffi.jffi.DefaultMethod || method instanceof org.jruby.ext.ffi.jffi.JITNativeInvoker) {
             // if frame/scope required, can't dispatch direct
             if (method.getCallConfig() != CallConfiguration.FrameNoneScopeNone) {
-                throw new IndirectBindingException("frame or scope required");
+                throw new IndirectBindingException("frame or scope required: " + method.getCallConfig());
             }
-            
+
+            if (!method.getArity().isFixed()) {
+                throw new IndirectBindingException("fixed arity required: " + method.getArity());
+            }
+
+            // Only support 0..6 parameters
+            if (method.getArity().getValue() > 6) {
+                throw new IndirectBindingException("target args > 6");
+            }
+
+            if (site.type().parameterType(site.type().parameterCount() - 1) == Block.class) {
+                // Called with a block to substitute for a callback param - cannot bind directly
+                throw new IndirectBindingException("callback block supplied");
+            }
+
+        } else if (nativeCall != null) {
+            // has an explicit native call path
+
+            // if frame/scope required, can't dispatch direct
+            if (method.getCallConfig() != CallConfiguration.FrameNoneScopeNone) {
+                throw new IndirectBindingException("frame or scope required: " + method.getCallConfig());
+            }
+
             if (nativeCall.isJava()) {
-                 if (!RubyInstanceConfig.INVOKEDYNAMIC_JAVA) {
+                if (!RubyInstanceConfig.INVOKEDYNAMIC_JAVA) {
                     throw new IndirectBindingException("direct Java dispatch not enabled");
-                 }
-                 
+                }
+
                 // if Java, must:
                 // * match arity <= 3
                 // * not be passed a block (no coercion yet)
@@ -480,29 +519,25 @@ public class InvocationLinker {
                 }
             } else {
                 // if non-Java, must:
-                // * exactly match arities
+                // * exactly match arities or both are [] boxed
                 // * 3 or fewer arguments
-                
+
                 int nativeArgCount = (method instanceof CompiledMethod || method instanceof JittedMethod)
                         ? getRubyArgCount(nativeCall.getNativeSignature())
                         : getArgCount(nativeCall.getNativeSignature(), nativeCall.isStatic());
-                
-                // match arity and arity is not 4 (IRubyObject[].class)
-                if (nativeArgCount == 4) {
-                    throw new IndirectBindingException("target args > 4 or rest/optional");
-                }
-                
+
+                // arity must match or both be [] args
                 if (nativeArgCount != siteArgCount) {
-                    throw new IndirectBindingException("arity mismatch at call site");
+                    throw new IndirectBindingException("arity mismatch or varargs at call site: " + nativeArgCount + " != " + siteArgCount);
                 }
             }
         } else {
             throw new IndirectBindingException("no direct path available for " + method.getClass().getName());
         }
-        
+
         return handleForMethod(site, name, cls, method);
     }
-    
+
     private static MethodHandle getTarget(JRubyCallSite site, RubyClass cls, String name, CacheEntry entry, int arity) {
         IndirectBindingException ibe;
         try {
@@ -511,20 +546,22 @@ public class InvocationLinker {
             ibe = _ibe;
             // proceed with indirect, if enabled
         }
-        
+
         // if indirect indy-bound methods (via DynamicMethod.call) are disabled, bail out
         if (!RubyInstanceConfig.INVOKEDYNAMIC_INDIRECT) {
-            if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(name + "\tfailed to bind to #" + entry.method.getSerialNumber() + ": " + ibe.getMessage());
+            if (RubyInstanceConfig.LOG_INDY_BINDINGS)
+                LOG.info(name + "\tfailed to bind to " + logMethod(entry.method) + ": " + ibe.getMessage());
             return null;
         }
-        
+
         // no direct native path, use DynamicMethod.call
-        if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(name + "\tbound indirectly to #" + entry.method.getSerialNumber() + ": " + ibe.getMessage());
-        
+        if (RubyInstanceConfig.LOG_INDY_BINDINGS)
+            LOG.info(name + "\tbound indirectly to " + logMethod(entry.method) + ": " + ibe.getMessage());
+
         MethodHandle dynMethodTarget = getDynamicMethodTarget(site.type(), arity, entry.method);
         dynMethodTarget = insertArguments(dynMethodTarget, 4, name);
         dynMethodTarget = insertArguments(dynMethodTarget, 0, entry);
-        
+
         return dynMethodTarget;
     }
     
@@ -533,26 +570,31 @@ public class InvocationLinker {
         
         if (method instanceof AttrReaderMethod) {
             // Ruby to attr reader
-            if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(name + "\tbound as attr reader #" + method.getSerialNumber() + ":" + ((AttrReaderMethod)method).getVariableName());
+            if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(name + "\tbound as attr reader " + logMethod(method) + ":" + ((AttrReaderMethod)method).getVariableName());
             nativeTarget = createAttrReaderHandle(site, cls, method);
         } else if (method instanceof AttrWriterMethod) {
             // Ruby to attr writer
-            if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(name + "\tbound as attr writer #" + method.getSerialNumber() + ":" + ((AttrWriterMethod)method).getVariableName());
+            if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(name + "\tbound as attr writer " + logMethod(method) + ":" + ((AttrWriterMethod)method).getVariableName());
             nativeTarget = createAttrWriterHandle(site, cls, method);
+
+        } else if (method instanceof org.jruby.ext.ffi.jffi.JITNativeInvoker || method instanceof org.jruby.ext.ffi.jffi.DefaultMethod) {
+            // Ruby to FFI
+            nativeTarget = createFFIHandle(site, method);
+
         } else if (method.getNativeCall() != null) {
             DynamicMethod.NativeCall nativeCall = method.getNativeCall();
 
             if (nativeCall.isJava()) {
                 // Ruby to Java
-                if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(name + "\tbound to Java method #" + method.getSerialNumber() + ": " + nativeCall);
+                if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(name + "\tbound to Java method " + logMethod(method) + ": " + nativeCall);
                 nativeTarget = createJavaHandle(site, method);
             } else if (method instanceof CompiledMethod || method instanceof JittedMethod) {
                 // Ruby to Ruby
-                if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(name + "\tbound to Ruby method #" + method.getSerialNumber() + ": " + nativeCall);
+                if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(name + "\tbound to Ruby method " + logMethod(method) + ": " + nativeCall);
                 nativeTarget = createRubyHandle(site, method);
             } else {
                 // Ruby to Core
-                if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(name + "\tbound to native method #" + method.getSerialNumber() + ": " + nativeCall);
+                if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(name + "\tbound to native method " + logMethod(method) + ": " + nativeCall);
                 nativeTarget = createNativeHandle(site, method);
             }
         }
@@ -586,8 +628,8 @@ public class InvocationLinker {
         return metaclass == ((RubyBasicObject)self).getMetaClass();
     }
 
-    public static boolean testRealClass(RubyClass realclass, IRubyObject self) {
-        return realclass == ((RubyBasicObject)self).getMetaClass().getRealClass();
+    public static boolean testRealClass(int id, IRubyObject self) {
+        return id == ((RubyBasicObject)self).getMetaClass().getRealClass().id;
     }
     
     public static IRubyObject getLast(IRubyObject[] args) {
@@ -1008,6 +1050,15 @@ public class InvocationLinker {
         Ruby runtime = method.getImplementationClass().getRuntime();
         DynamicMethod.NativeCall nativeCall = method.getNativeCall();
         boolean isStatic = nativeCall.isStatic();
+
+        // varargs broken, so ignore methods that take a trailing array
+        Class[] signature = nativeCall.getNativeSignature();
+        if (signature.length > 0 && signature[signature.length - 1].isArray()) {
+            return null;
+        }
+
+        // Scala singletons have slightly different JI logic, so skip for now
+        if (method instanceof SingletonMethodInvoker) return null;
         
         // the "apparent" type from the NativeCall, excluding receiver
         MethodType apparentType = methodType(nativeCall.getNativeReturn(), nativeCall.getNativeSignature());
@@ -1038,6 +1089,7 @@ public class InvocationLinker {
                 converter = Binder
                         .from(nativeParams[i], IRubyObject.class)
                         .insert(1, nativeParams[i])
+                        .cast(Object.class, IRubyObject.class, Class.class)
                         .invokeVirtualQuiet(lookup(), "toJava");
             }
             argConverters[i] = converter;
@@ -1285,6 +1337,29 @@ public class InvocationLinker {
         // can't build native handle for it
         return null;
     }
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Dispatch via direct handle to FFI native method
+    ////////////////////////////////////////////////////////////////////////////
+
+    private static MethodHandle createFFIHandle(JRubyCallSite site, DynamicMethod method) {
+        if (site.type().parameterType(site.type().parameterCount() - 1) == Block.class) {
+            // Called with a block to substitute for a callback param - cannot cache or use a cached handle
+            return null;
+        }
+
+        MethodHandle nativeTarget = (MethodHandle) method.getHandle();
+        if (nativeTarget != null) return nativeTarget;
+
+        nativeTarget = org.jruby.ext.ffi.jffi.InvokeDynamic.getMethodHandle(site, method);
+        if (nativeTarget != null) {
+            method.setHandle(nativeTarget);
+            return nativeTarget;
+        }
+
+        // can't build native handle for it
+        return null;
+    }
     
     ////////////////////////////////////////////////////////////////////////////
     // Dispatch to attribute accessors
@@ -1312,8 +1387,9 @@ public class InvocationLinker {
                 .insert(1, accessor.getIndex())
                 .cast(Object.class, IRubyObject.class, int.class)
                 .invokeVirtualQuiet(lookup(), "getVariable");
-        
-        method.setHandle(nativeTarget);
+
+        // NOTE: Must not cache the fully-bound handle in the method, since it's specific to this class
+
         return nativeTarget;
     }
     
@@ -1342,8 +1418,9 @@ public class InvocationLinker {
                 .insert(1, accessor.getIndex())
                 .cast(void.class, IRubyObject.class, int.class, Object.class)
                 .invokeVirtualQuiet(lookup(), "setVariable");
-        
-        method.setHandle(nativeTarget);
+
+        // NOTE: Must not cache the fully-bound handle in the method, since it's specific to this class
+
         return nativeTarget;
     }
     
@@ -1460,6 +1537,26 @@ public class InvocationLinker {
         }
 
         return length;
+    }
+
+    private static int getSiteCount(Class[] args) {
+        if (args[args.length - 1] == Block.class) {
+            if (args[args.length - 2] == IRubyObject[].class) {
+                return 4;
+            } else {
+                return args.length - 4; // TC, caller, self, block
+            }
+        } else {
+            if (args[args.length - 1] == IRubyObject[].class) {
+                return 4;
+            } else {
+                return args.length - 3; // TC, caller, self
+            }
+        }
+    }
+    
+    private static String logMethod(DynamicMethod method) {
+        return "[#" + method.getSerialNumber() + " " + method.getImplementationClass() + "]";
     }
 
     private static final MethodHandle GETMETHOD;

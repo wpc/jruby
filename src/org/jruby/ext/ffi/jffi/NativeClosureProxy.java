@@ -191,7 +191,7 @@ final class NativeClosureProxy implements Closure {
                 buffer.setStructReturn(new byte[type.getNativeSize()], 0);
 
             } else {
-                throw runtime.newTypeError(value, runtime.getModule("FFI").getClass("Struct"));
+                throw runtime.newTypeError(value, runtime.getFFI().structClass);
             }
 
         } else if (type instanceof MappedType) {
@@ -254,6 +254,7 @@ final class NativeClosureProxy implements Closure {
                     return new Pointer(runtime, NativeMemoryIO.wrap(runtime, buffer.getAddress(index)));
 
                 case STRING:
+                case TRANSIENT_STRING:
                     return getStringParameter(runtime, buffer, index);
 
                 case BOOL:
@@ -280,7 +281,7 @@ final class NativeClosureProxy implements Closure {
             final long address = buffer.getStruct(index);
             DirectMemoryIO memory = address != 0
                     ? new BoundedNativeMemoryIO(runtime, address, type.getNativeSize())
-                    : new NullMemoryIO(runtime);
+                    : runtime.getFFI().getNullMemoryIO();
 
             return sbv.getStructClass().newInstance(runtime.getCurrentContext(),
                         new IRubyObject[] { new Pointer(runtime, memory) },

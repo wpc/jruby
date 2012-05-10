@@ -6,10 +6,8 @@ module Kernel
     else
       relative_feature = relative_feature
     end
-    unless relative_feature.respond_to? :to_str
-      raise TypeError, "cannot convert #{relative_feature.class} into String"
-    end
-    relative_feature = relative_feature.to_str
+
+    relative_feature = JRuby::Type.convert_to_str(relative_feature)
     
     c = caller.first
     e = c.rindex(/:\d+:in /)

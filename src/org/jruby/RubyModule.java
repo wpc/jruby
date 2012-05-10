@@ -68,7 +68,7 @@ import org.jruby.compiler.ASTInspector;
 import org.jruby.exceptions.RaiseException;
 import org.jruby.internal.runtime.methods.AliasMethod;
 import org.jruby.internal.runtime.methods.CallConfiguration;
-import org.jruby.internal.runtime.methods.DefaultMethod;
+import org.jruby.internal.runtime.methods.CacheableMethod;
 import org.jruby.internal.runtime.methods.DynamicMethod;
 import org.jruby.internal.runtime.methods.FullFunctionCallbackMethod;
 import org.jruby.internal.runtime.methods.JavaMethod;
@@ -398,6 +398,7 @@ public class RubyModule extends RubyObject {
      * @return The generated class name
      */
     public String getName() {
+        if (cachedName != null) return cachedName;
         return calculateName();
     }
     
@@ -416,6 +417,8 @@ public class RubyModule extends RubyObject {
      * Recalculate the fully-qualified name of this class/module.
      */
     private String calculateName() {
+        boolean cache = true;
+
         if (getBaseName() == null) {
             // we are anonymous, use anonymous name
             return calculateAnonymousName();
@@ -445,7 +448,8 @@ public class RubyModule extends RubyObject {
             // is to insert the generate the name of form #<Class:01xasdfasd> if 
             // it's a singleton module/class, which this code accomplishes.
             if(pName == null) {
-                pName = p.getName();;
+                cache = false;
+                pName = p.getName();
              }
             
             parentNames[i] = pName;
@@ -459,7 +463,11 @@ public class RubyModule extends RubyObject {
         }
         builder.append(name);
         
-        return builder.toString();
+        String fullName = builder.toString();
+
+        if (cache) cachedName = fullName;
+
+        return fullName;
     }
 
     private String calculateAnonymousName() {
@@ -612,6 +620,8 @@ public class RubyModule extends RubyObject {
         Map<String, List<JavaMethodDescriptor>> staticAnnotatedMethods1_8 = new HashMap<String, List<JavaMethodDescriptor>>();
         Map<String, List<JavaMethodDescriptor>> annotatedMethods1_9 = new HashMap<String, List<JavaMethodDescriptor>>();
         Map<String, List<JavaMethodDescriptor>> staticAnnotatedMethods1_9 = new HashMap<String, List<JavaMethodDescriptor>>();
+        Map<String, List<JavaMethodDescriptor>> annotatedMethods2_0 = new HashMap<String, List<JavaMethodDescriptor>>();
+        Map<String, List<JavaMethodDescriptor>> staticAnnotatedMethods2_0 = new HashMap<String, List<JavaMethodDescriptor>>();
         Map<String, List<JavaMethodDescriptor>> allAnnotatedMethods = new HashMap<String, List<JavaMethodDescriptor>>();
         
         public void clump(Class cls) {
@@ -631,6 +641,8 @@ public class RubyModule extends RubyObject {
                         methodsHash = staticAnnotatedMethods1_8;
                     } else if (anno.compat() == RUBY1_9) {
                         methodsHash = staticAnnotatedMethods1_9;
+                    } else if (anno.compat() == RUBY2_0) {
+                        methodsHash = staticAnnotatedMethods2_0;
                     } else {
                         methodsHash = staticAnnotatedMethods;
                     }
@@ -639,6 +651,8 @@ public class RubyModule extends RubyObject {
                         methodsHash = annotatedMethods1_8;
                     } else if (anno.compat() == RUBY1_9) {
                         methodsHash = annotatedMethods1_9;
+                    } else if (anno.compat() == RUBY2_0) {
+                        methodsHash = annotatedMethods2_0;
                     } else {
                         methodsHash = annotatedMethods;
                     }
@@ -680,6 +694,10 @@ public class RubyModule extends RubyObject {
             return annotatedMethods1_9;
         }
 
+        public Map<String, List<JavaMethodDescriptor>> getAnnotatedMethods2_0() {
+            return annotatedMethods2_0;
+        }
+
         public Map<String, List<JavaMethodDescriptor>> getStaticAnnotatedMethods() {
             return staticAnnotatedMethods;
         }
@@ -690,6 +708,10 @@ public class RubyModule extends RubyObject {
 
         public Map<String, List<JavaMethodDescriptor>> getStaticAnnotatedMethods1_9() {
             return staticAnnotatedMethods1_9;
+        }
+
+        public Map<String, List<JavaMethodDescriptor>> getStaticAnnotatedMethods2_0() {
+            return staticAnnotatedMethods2_0;
         }
     }
     
@@ -934,8 +956,8 @@ public class RubyModule extends RubyObject {
         int token = getGeneration();
         DynamicMethod method = searchMethodInner(name);
 
-        if (method instanceof DefaultMethod) {
-            method = ((DefaultMethod)method).getMethodForCaching();
+        if (method instanceof CacheableMethod) {
+            method = ((CacheableMethod) method).getMethodForCaching();
         }
 
         return method != null ? addToCache(name, method, token) : addToCache(name, UndefinedMethod.getInstance(), token);
@@ -1861,7 +1883,7 @@ public class RubyModule extends RubyObject {
     @JRubyMethod(name = "initialize", frame = true, visibility = PRIVATE)
     public IRubyObject initialize(ThreadContext context, Block block) {
         if (block.isGiven()) {
-            module_exec(context, block);
+            module_exec(context, new IRubyObject[] {this}, block);
         }
 
         return getRuntime().getNil();
@@ -1949,7 +1971,8 @@ public class RubyModule extends RubyObject {
     }
 
     /** rb_mod_attr_accessor
-     *
+     *  Note: this method should not be called from Java in most cases, since
+     *  it depends on Ruby frame state for visibility. Use add[Read/Write]Attribute instead.
      */
     @JRubyMethod(name = "attr_accessor", rest = true, visibility = PRIVATE, reads = VISIBILITY)
     public IRubyObject attr_accessor(ThreadContext context, IRubyObject[] args) {
@@ -2113,6 +2136,72 @@ public class RubyModule extends RubyObject {
     @JRubyMethod(name = "extended", required = 1, frame = true, visibility = PRIVATE)
     public IRubyObject extended(ThreadContext context, IRubyObject other, Block block) {
         return context.getRuntime().getNil();
+    }
+
+    @JRubyMethod(name = "mix", visibility = PRIVATE, compat = RUBY2_0)
+    public IRubyObject mix(ThreadContext context, IRubyObject mod) {
+        Ruby runtime = context.runtime;
+
+        if (!mod.isModule()) {
+            throw runtime.newTypeError(mod, runtime.getModule());
+        }
+
+        for (Map.Entry<String, DynamicMethod> entry : ((RubyModule)mod).methods.entrySet()) {
+            if (methods.containsKey(entry.getKey())) {
+                throw runtime.newArgumentError("method would conflict - " + entry.getKey());
+            }
+        }
+
+        for (Map.Entry<String, DynamicMethod> entry : ((RubyModule)mod).methods.entrySet()) {
+            getMethodsForWrite().put(entry.getKey(), entry.getValue().dup());
+        }
+
+        return mod;
+    }
+
+    @JRubyMethod(name = "mix", visibility = PRIVATE, compat = RUBY2_0)
+    public IRubyObject mix(ThreadContext context, IRubyObject mod, IRubyObject hash0) {
+        Ruby runtime = context.runtime;
+        RubyHash methodNames = null;
+
+        if (!mod.isModule()) {
+            throw runtime.newTypeError(mod, runtime.getModule());
+        }
+
+        if (hash0 instanceof RubyHash) {
+            methodNames = (RubyHash)hash0;
+        } else {
+            throw runtime.newTypeError(hash0, runtime.getHash());
+        }
+        
+        for (Map.Entry entry : (Set<Map.Entry<Object, Object>>)methodNames.directEntrySet()) {
+            String name = entry.getValue().toString();
+            if (methods.containsKey(entry.getValue().toString())) {
+                throw runtime.newArgumentError("constant would conflict - " + name);
+            }
+        }
+
+        for (Map.Entry<String, DynamicMethod> entry : ((RubyModule)mod).methods.entrySet()) {
+            if (methods.containsKey(entry.getKey())) {
+                throw runtime.newArgumentError("method would conflict - " + entry.getKey());
+            }
+        }
+
+        for (Map.Entry<String, DynamicMethod> entry : ((RubyModule)mod).methods.entrySet()) {
+            String name = entry.getKey();
+            IRubyObject mapped = methodNames.fastARef(runtime.newSymbol(name));
+            if (mapped == NEVER) {
+                // unmapped
+            } else if (mapped == context.nil) {
+                // do not mix
+                continue;
+            } else {
+                name = mapped.toString();
+            }
+            getMethodsForWrite().put(name, entry.getValue().dup());
+        }
+
+        return mod;
     }
 
     private void setVisibility(ThreadContext context, IRubyObject[] args, Visibility visibility) {
@@ -2280,11 +2369,12 @@ public class RubyModule extends RubyObject {
     @JRubyMethod(name = {"module_exec", "class_exec"}, frame = true)
     public IRubyObject module_exec(ThreadContext context, Block block) {
         if (block.isGiven()) {
-            return yieldUnder(context, this, block);
+            return yieldUnder(context, this, IRubyObject.NULL_ARRAY, block);
         } else {
             throw context.getRuntime().newLocalJumpErrorNoBlock();
         }
     }
+
     @JRubyMethod(name = {"module_exec", "class_exec"}, rest = true, frame = true)
     public IRubyObject module_exec(ThreadContext context, IRubyObject[] args, Block block) {
         if (block.isGiven()) {
@@ -2453,25 +2543,40 @@ public class RubyModule extends RubyObject {
     /** rb_mod_cvar_get
      *
      */
-    @JRubyMethod(name = "class_variable_get", required = 1, visibility = PRIVATE)
+    @JRubyMethod(name = "class_variable_get", visibility = PRIVATE, compat = RUBY1_8)
     public IRubyObject class_variable_get(IRubyObject var) {
         return getClassVar(validateClassVariable(var.asJavaString()).intern());
+    }
+
+    @JRubyMethod(name = "class_variable_get", compat = RUBY1_9)
+    public IRubyObject class_variable_get19(IRubyObject var) {
+        return class_variable_get(var);
     }
 
     /** rb_mod_cvar_set
      *
      */
-    @JRubyMethod(name = "class_variable_set", required = 2, visibility = PRIVATE)
+    @JRubyMethod(name = "class_variable_set", visibility = PRIVATE, compat = RUBY1_8)
     public IRubyObject class_variable_set(IRubyObject var, IRubyObject value) {
         return setClassVar(validateClassVariable(var.asJavaString()).intern(), value);
+    }
+
+    @JRubyMethod(name = "class_variable_set", compat = RUBY1_9)
+    public IRubyObject class_variable_set19(IRubyObject var, IRubyObject value) {
+        return class_variable_set(var, value);
     }
 
     /** rb_mod_remove_cvar
      *
      */
-    @JRubyMethod(name = "remove_class_variable", required = 1, visibility = PRIVATE)
+    @JRubyMethod(name = "remove_class_variable", visibility = PRIVATE, compat = RUBY1_8)
     public IRubyObject remove_class_variable(ThreadContext context, IRubyObject name) {
         return removeClassVariable(name.asJavaString());
+    }
+
+    @JRubyMethod(name = "remove_class_variable", compat = RUBY1_9)
+    public IRubyObject remove_class_variable19(ThreadContext context, IRubyObject name) {
+        return remove_class_variable(context, name);
     }
 
     /** rb_mod_class_variables
@@ -3589,6 +3694,11 @@ public class RubyModule extends RubyObject {
      */
     private String anonymousName;
 
+    /**
+     * The cached name, only cached once this class and all containing classes are non-anonymous
+     */
+    private String cachedName;
+
     private volatile Map<String, ConstantEntry> constants = Collections.EMPTY_MAP;
 
     /**
@@ -3601,6 +3711,10 @@ public class RubyModule extends RubyObject {
         public ConstantEntry(IRubyObject value, boolean hidden) {
             this.value = value;
             this.hidden = hidden;
+        }
+        
+        public ConstantEntry dup() {
+            return new ConstantEntry(value, hidden);
         }
     }
     
@@ -3688,6 +3802,22 @@ public class RubyModule extends RubyObject {
      */
     public boolean getJavaProxy() {
         return javaProxy;
+    }
+
+    /**
+     * Get whether this Java proxy class should try to keep its instances idempotent
+     * and alive using the ObjectProxyCache.
+     */
+    public boolean getCacheProxy() {
+        return getFlag(USER0_F);
+    }
+
+    /**
+     * Set whether this Java proxy class should try to keep its instances idempotent
+     * and alive using the ObjectProxyCache.
+     */
+    public void setCacheProxy(boolean cacheProxy) {
+        setFlag(USER0_F, cacheProxy);
     }
     
     private volatile Map<String, Autoload> autoloads = Collections.EMPTY_MAP;

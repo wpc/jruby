@@ -156,7 +156,7 @@ public class RaiseException extends JumpException {
     }
 
     public static RaiseException createNativeRaiseException(Ruby runtime, Throwable cause, Member target) {
-        NativeException nativeException = new NativeException(runtime, runtime.getClass(NativeException.CLASS_NAME), cause);
+        NativeException nativeException = new NativeException(runtime, runtime.getNativeException(), cause);
 
         // FIXME: someday, add back filtering of reflection/handle methods between JRuby and target
 
@@ -216,6 +216,16 @@ public class RaiseException extends JumpException {
             exception.forceBacktrace(backtrace);
         }
 
+        // call Throwable.setStackTrace so that when RaiseException appears nested inside another exception,
+        // Ruby stack trace gets displayed
+
+        // JRUBY-2673: if wrapping a NativeException, use the actual Java exception's trace as our Java trace
+        if (exception instanceof NativeException) {
+            setStackTrace(((NativeException)exception).getCause().getStackTrace());
+        } else {
+            setStackTrace(javaTraceFromRubyTrace(exception.getBacktraceElements()));
+        }
+
         if (RubyInstanceConfig.LOG_EXCEPTIONS) TraceType.dumpException(exception);
     }
 
@@ -231,27 +241,13 @@ public class RaiseException extends JumpException {
         }
     }
     
-    private StackTraceElement[] cachedTrace;
-
-    @Override
-    public StackTraceElement[] getStackTrace() {
-        if (cachedTrace == null) {
-            // JRUBY-2673: if wrapping a NativeException, use the actual Java exception's trace as our Java trace
-            if (exception instanceof NativeException) {
-                setStackTrace(cachedTrace = ((NativeException)exception).getCause().getStackTrace());
-            } else {
-                setStackTrace(cachedTrace = javaTraceFromRubyTrace(exception.getBacktraceElements()));
-            }
-        }
-        return cachedTrace;
-    }
-
     /**
      * Sets the exception
      * @param newException The exception to set
      */
     protected void setException(RubyException newException, boolean nativeException) {
         this.exception = newException;
+        this.nativeException = nativeException;
     }
 
     private StackTraceElement[] javaTraceFromRubyTrace(RubyStackTraceElement[] trace) {
@@ -260,23 +256,5 @@ public class RaiseException extends JumpException {
             newTrace[i] = trace[i].getElement();
         }
         return newTrace;
-    }
-
-    @Override
-    public void printStackTrace() {
-        printStackTrace(System.err);
-    }
-    
-    @Override
-    public void printStackTrace(PrintStream ps) {
-        getStackTrace();
-        super.printStackTrace(ps);
-    }
-    
-    @Override
-    public void printStackTrace(PrintWriter pw) {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        printStackTrace(new PrintStream(baos));
-        pw.print(baos.toString());
     }
 }

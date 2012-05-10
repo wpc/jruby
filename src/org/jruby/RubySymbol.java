@@ -45,6 +45,7 @@ import static org.jruby.util.StringSupport.codePoint;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.jcodings.Encoding;
+import org.jcodings.specific.USASCIIEncoding;
 import org.jruby.anno.JRubyClass;
 import org.jruby.anno.JRubyMethod;
 import org.jruby.ast.util.ArgsUtil;
@@ -53,11 +54,14 @@ import org.jruby.javasupport.util.RuntimeHelpers;
 import org.jruby.runtime.Arity;
 import org.jruby.runtime.Block;
 import org.jruby.runtime.BlockBody;
+import org.jruby.runtime.CallSite;
 import org.jruby.runtime.ClassIndex;
 import org.jruby.runtime.ContextAwareBlockBody;
 import org.jruby.runtime.ObjectAllocator;
 import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.builtin.IRubyObject;
+import org.jruby.runtime.callsite.FunctionalCachingCallSite;
+import org.jruby.runtime.callsite.NormalCachingCallSite;
 import org.jruby.runtime.marshal.UnmarshalStream;
 import org.jruby.util.ByteList;
 
@@ -97,7 +101,7 @@ public class RubySymbol extends RubyObject {
     }
 
     private RubySymbol(Ruby runtime, String internedSymbol) {
-        this(runtime, internedSymbol, ByteList.create(internedSymbol));
+        this(runtime, internedSymbol, symbolBytesFromString(runtime, internedSymbol));
     }
 
     public static RubyClass createSymbolClass(Ruby runtime) {
@@ -410,12 +414,15 @@ public class RubySymbol extends RubyObject {
     
     @JRubyMethod
     public IRubyObject to_proc(ThreadContext context) {
-        StaticScope scope = context.getRuntime().getStaticScopeFactory().newLocalScope(null);
+        StaticScope scope = context.getRuntime().getStaticScopeFactory().getDummyScope();
+        final CallSite site = new FunctionalCachingCallSite(symbol);
         BlockBody body = new ContextAwareBlockBody(scope, Arity.OPTIONAL, BlockBody.SINGLE_RESTARG) {
             private IRubyObject yieldInner(ThreadContext context, RubyArray array) {
                 if (array.isEmpty()) throw context.getRuntime().newArgumentError("no receiver given");
 
-                return RuntimeHelpers.invoke(context, array.shift(context), symbol, array.toJavaArray());
+                IRubyObject self = array.shift(context);
+
+                return site.call(context, self, self, array.toJavaArray());
             }
             
             @Override
@@ -613,6 +620,14 @@ public class RubySymbol extends RubyObject {
         return super.toJava(target);
     }
 
+    private static ByteList symbolBytesFromString(Ruby runtime, String internedSymbol) {
+        if (runtime.is1_9()) {
+            return new ByteList(ByteList.plain(internedSymbol), USASCIIEncoding.INSTANCE, false);
+        } else {
+            return ByteList.create(internedSymbol);
+        }
+    }
+
     public static final class SymbolTable {
         static final int DEFAULT_INITIAL_CAPACITY = 2048; // *must* be power of 2!
         static final int MAXIMUM_CAPACITY = 1 << 30;
@@ -657,7 +672,7 @@ public class RubySymbol extends RubyObject {
                 if (isSymbolMatch(name, hash, e)) return e.symbol;
             }
             
-            return createSymbol(name, ByteList.create(name), hash, table);
+            return createSymbol(name, symbolBytesFromString(runtime, name), hash, table);
         }
 
         public RubySymbol getSymbol(ByteList bytes) {

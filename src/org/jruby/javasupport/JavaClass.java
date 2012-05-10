@@ -440,14 +440,14 @@ public class JavaClass extends JavaObject {
         }
 
         void install(RubyModule proxy) {
-            if (hasLocalMethod()) {
-                RubyClass rubySingleton = proxy.getSingletonClass();
-                DynamicMethod method = new SingletonMethodInvoker(this.singleton, rubySingleton, methods);
-                rubySingleton.addMethod(name, method);
-                if (aliases != null && isPublic()) {
-                    rubySingleton.defineAliases(aliases, this.name);
-                    aliases = null;
-                }
+            // we don't check haveLocalMethod() here because it's not local and we know
+            // that we always want to go ahead and install it
+            RubyClass rubySingleton = proxy.getSingletonClass();
+            DynamicMethod method = new SingletonMethodInvoker(this.singleton, rubySingleton, methods);
+            rubySingleton.addMethod(name, method);
+            if (aliases != null && isPublic()) {
+                rubySingleton.defineAliases(aliases, this.name);
+                aliases = null;
             }
         }
     }
@@ -752,6 +752,11 @@ public class JavaClass extends JavaObject {
                 addUnassignedAlias("[]=", assignedNames, installer);
             }
 
+            // Scala aliases for $ method names
+            if (name.startsWith("$")) {
+                addUnassignedAlias(fixScalaNames(name), assignedNames, installer);
+            }
+
             // Add property name aliases
             if (javaPropertyName != null) {
                 if (rubyCasedName.startsWith("get_")) {
@@ -964,11 +969,6 @@ public class JavaClass extends JavaObject {
             // install the ones that are named in this class
             Method method = methods[i];
             String name = method.getName();
-
-            // Fix Scala names to be their Ruby equivalents
-            if (name.startsWith("$")) {
-                name = fixScalaNames(name);
-            }
 
             if (Modifier.isStatic(method.getModifiers())) {
                 AssignedName assignedName = state.staticNames.get(name);

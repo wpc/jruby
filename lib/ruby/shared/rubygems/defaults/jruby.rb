@@ -1,5 +1,6 @@
 require 'rubygems/config_file'
 require 'rbconfig'
+require 'jruby/util'
 
 module Gem
 
@@ -46,7 +47,7 @@ module Gem
   # JRuby: Look in CONFIG['host_os'] as well.
   def self.win_platform?
     if @@win_platform.nil? then
-      @@win_platform = !!WIN_PATTERNS.find { |r| RUBY_PLATFORM =~ r || Config::CONFIG["host_os"] =~ r }
+      @@win_platform = !!WIN_PATTERNS.find { |r| RUBY_PLATFORM =~ r || RbConfig::CONFIG["host_os"] =~ r }
     end
 
     @@win_platform
@@ -77,7 +78,6 @@ class Gem::Specification
     end
 
     def spec_directories_from_classpath
-      require 'jruby/util'
       stuff = JRuby::Util.classloader_resources("specifications")
     end
   end

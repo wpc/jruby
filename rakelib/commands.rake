@@ -5,7 +5,7 @@ require 'rbconfig'
 # Determine if we need to put a 32 or 64 bit flag to the command-line
 # based on what java reports as the hardward architecture.
 def jvm_model
-  return nil if Config::CONFIG['host_os'] =~ /mswin|mingw/
+  return nil if RbConfig::CONFIG['host_os'] =~ /mswin|mingw/
 
   case ENV_JAVA['os.arch']
   when 'amd64', 'x86_64', 'sparcv9', 's390x' then
@@ -96,6 +96,7 @@ def mspec(mspec_options = {}, java_options = {}, &code)
 
     env :key => "JAVA_OPTS", :value => "-Demma.verbosity.level=silent"
     env :key => "JRUBY_OPTS", :value => ""
+    arg :line => "--1.8" # we launch mspec in 1.8 mode due to oddities in loading .mspec files
     arg :line => "#{MSPEC_BIN} ci"
     arg :line => "-T -J-ea"
     arg :line => "-T -J-Djruby.launch.inproc=false"

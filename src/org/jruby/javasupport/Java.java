@@ -356,10 +356,10 @@ public class Java implements Library {
     }
 
     /**
-     * Same as Java#getInstance(runtime, rawJavaObject, System.getBoolean('jruby.ji.objectProxyCache')).
+     * Same as Java#getInstance(runtime, rawJavaObject, false).
      */
     public static IRubyObject getInstance(Ruby runtime, Object rawJavaObject) {
-        return getInstance(runtime, rawJavaObject, OBJECT_PROXY_CACHE);
+        return getInstance(runtime, rawJavaObject, false);
     }
     
     /**
@@ -369,19 +369,20 @@ public class Java implements Library {
      * JavaUtil.convertJavaToUsableRubyObject to get coerced types or proxies as
      * appropriate.
      * 
-     * @param runtime
-     * @param rawJavaObject
-     * @param useCache 
-     * @return the new (or cached, if useCache is true) proxy for the specified Java object
+     * @param runtime the JRuby runtime
+     * @param rawJavaObject the object to get a wrapper for
+     * @param forceCache whether to force the use of the proxy cache
+     * @return the new (or cached) proxy for the specified Java object
      * @see JavaUtil#convertJavaToUsableRubyObject
      */
-    public static IRubyObject getInstance(Ruby runtime, Object rawJavaObject, boolean useCache) {
+    public static IRubyObject getInstance(Ruby runtime, Object rawJavaObject, boolean forceCache) {
         if (rawJavaObject != null) {
-            if (OBJECT_PROXY_CACHE && useCache) {
-                return runtime.getJavaSupport().getObjectProxyCache().getOrCreate(rawJavaObject,
-                        (RubyClass) getProxyClass(runtime, JavaClass.get(runtime, rawJavaObject.getClass())));
+            RubyClass proxyClass = (RubyClass) getProxyClass(runtime, JavaClass.get(runtime, rawJavaObject.getClass()));
+
+            if (OBJECT_PROXY_CACHE || forceCache || proxyClass.getCacheProxy()) {
+                return runtime.getJavaSupport().getObjectProxyCache().getOrCreate(rawJavaObject, proxyClass);
             } else {
-                return allocateProxy(rawJavaObject, (RubyClass)getProxyClass(runtime, JavaClass.get(runtime, rawJavaObject.getClass())));
+                return allocateProxy(rawJavaObject, proxyClass);
             }
         }
         return runtime.getNil();
@@ -548,14 +549,14 @@ public class Java implements Library {
     }
 
     public static class JavaProxyClassMethods {
-        @JRubyMethod(backtrace = true, meta = true)
+        @JRubyMethod(meta = true)
         public static IRubyObject java_method(ThreadContext context, IRubyObject proxyClass, IRubyObject rubyName) {
             String name = rubyName.asJavaString();
 
             return getRubyMethod(context, proxyClass, name);
         }
 
-        @JRubyMethod(backtrace = true, meta = true)
+        @JRubyMethod(meta = true)
         public static IRubyObject java_method(ThreadContext context, IRubyObject proxyClass, IRubyObject rubyName, IRubyObject argTypes) {
             String name = rubyName.asJavaString();
             RubyArray argTypesAry = argTypes.convertToArray();
@@ -564,7 +565,7 @@ public class Java implements Library {
             return getRubyMethod(context, proxyClass, name, argTypesClasses);
         }
 
-        @JRubyMethod(backtrace = true, meta = true)
+        @JRubyMethod(meta = true)
         public static IRubyObject java_send(ThreadContext context, IRubyObject recv, IRubyObject rubyName) {
             String name = rubyName.asJavaString();
             Ruby runtime = context.getRuntime();
@@ -573,7 +574,7 @@ public class Java implements Library {
             return method.invokeStaticDirect();
         }
 
-        @JRubyMethod(backtrace = true, meta = true)
+        @JRubyMethod(meta = true)
         public static IRubyObject java_send(ThreadContext context, IRubyObject recv, IRubyObject rubyName, IRubyObject argTypes) {
             String name = rubyName.asJavaString();
             RubyArray argTypesAry = argTypes.convertToArray();
@@ -588,7 +589,7 @@ public class Java implements Library {
             return method.invokeStaticDirect();
         }
 
-        @JRubyMethod(backtrace = true, meta = true)
+        @JRubyMethod(meta = true)
         public static IRubyObject java_send(ThreadContext context, IRubyObject recv, IRubyObject rubyName, IRubyObject argTypes, IRubyObject arg0) {
             String name = rubyName.asJavaString();
             RubyArray argTypesAry = argTypes.convertToArray();
@@ -604,7 +605,7 @@ public class Java implements Library {
             return method.invokeStaticDirect(arg0.toJava(argTypeClass));
         }
 
-        @JRubyMethod(required = 4, rest = true, backtrace = true, meta = true)
+        @JRubyMethod(required = 4, rest = true, meta = true)
         public static IRubyObject java_send(ThreadContext context, IRubyObject recv, IRubyObject[] args) {
             Ruby runtime = context.getRuntime();
 
@@ -627,12 +628,12 @@ public class Java implements Library {
             return method.invokeStaticDirect(argsAry);
         }
 
-        @JRubyMethod(backtrace = true, meta = true, visibility = PRIVATE)
+        @JRubyMethod(meta = true, visibility = PRIVATE)
         public static IRubyObject java_alias(ThreadContext context, IRubyObject proxyClass, IRubyObject newName, IRubyObject rubyName) {
             return java_alias(context, proxyClass, newName, rubyName, context.getRuntime().newEmptyArray());
         }
 
-        @JRubyMethod(backtrace = true, meta = true, visibility = PRIVATE)
+        @JRubyMethod(meta = true, visibility = PRIVATE)
         public static IRubyObject java_alias(ThreadContext context, IRubyObject proxyClass, IRubyObject newName, IRubyObject rubyName, IRubyObject argTypes) {
             String name = rubyName.asJavaString();
             String newNameStr = newName.asJavaString();

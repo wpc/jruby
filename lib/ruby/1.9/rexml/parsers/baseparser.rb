@@ -180,14 +180,14 @@ module REXML
 
       # Returns the next event.  This is a +PullEvent+ object.
       def pull
-        _pull_inner.tap do |event|
+        pull_event.tap do |event|
           @listeners.each do |listener|
             listener.receive event
           end
         end
       end
 
-      def _pull_inner
+      def pull_event
         if @closed
           x, @closed = @closed, nil
           return [ :end_element, x ]
@@ -376,7 +376,7 @@ module REXML
                 attrs.each { |a,b,c,d,e|
                   if b == "xmlns"
                     if c == "xml"
-                      if d != "http://www.w3.org/XML/1998/namespace"
+                      if e != "http://www.w3.org/XML/1998/namespace"
                         msg = "The 'xml' prefix must not be bound to any other namespace "+
                         "(http://www.w3.org/TR/REC-xml-names/#ns-decl)"
                         raise REXML::ParseException.new( msg, @source, self )
@@ -436,6 +436,7 @@ module REXML
         end
         return [ :dummy ]
       end
+      private :pull_event
 
       def entity( reference, entities )
         value = nil

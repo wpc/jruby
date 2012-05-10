@@ -4,52 +4,41 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.jruby.RubyModule;
-import org.jruby.compiler.ir.IRMethod;
-import org.jruby.compiler.ir.IRScope;
-import org.jruby.compiler.ir.representations.CFG;
-import org.jruby.compiler.ir.operands.Operand;
-import org.jruby.compiler.ir.operands.Splat;
-import org.jruby.compiler.ir.operands.Variable;
-import org.jruby.interpreter.Interpreter;
+import org.jruby.ir.IRMethod;
+import org.jruby.ir.IRScope;
+import org.jruby.ir.representations.CFG;
+import org.jruby.ir.operands.Operand;
+import org.jruby.ir.operands.Splat;
+import org.jruby.ir.operands.Variable;
+import org.jruby.ir.interpreter.Interpreter;
+import org.jruby.parser.StaticScope;
 import org.jruby.runtime.Arity;
 import org.jruby.runtime.Block;
 import org.jruby.runtime.DynamicScope;
-import org.jruby.parser.StaticScope;
+import org.jruby.runtime.PositionAware;
 import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.Visibility;
 import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.util.log.Logger;
 import org.jruby.util.log.LoggerFactory;
 
-public class InterpretedIRMethod extends DynamicMethod implements IRMethodArgs {
+public class InterpretedIRMethod extends DynamicMethod implements IRMethodArgs, PositionAware {
     private static final Logger LOG = LoggerFactory.getLogger("InterpretedIRMethod");
 
-    private final boolean  isTopLevel;
     private final IRScope method;
     private Arity arity;
     boolean displayedCFG = false; // FIXME: Remove when we find nicer way of logging CFG
     
-    private InterpretedIRMethod(IRScope method, Visibility visibility, RubyModule implementationClass, boolean isTopLevel) {
+    public InterpretedIRMethod(IRScope method, Visibility visibility, RubyModule implementationClass) {
         super(implementationClass, visibility, CallConfiguration.FrameNoneScopeNone);
         this.method = method;
         this.method.getStaticScope().determineModule();
-        this.isTopLevel = isTopLevel;
         this.arity = calculateArity();
     }
 
     // We can probably use IRMethod callArgs for something (at least arity)
     public InterpretedIRMethod(IRScope method, RubyModule implementationClass) {
-        this(method, Visibility.PRIVATE, implementationClass, false);
-    }
-
-    // We can probably use IRMethod callArgs for something (at least arity)
-    public InterpretedIRMethod(IRScope method, RubyModule implementationClass, boolean isTopLevel) {
-        this(method, Visibility.PRIVATE, implementationClass, isTopLevel);
-    }
-
-    // We can probably use IRMethod callArgs for something (at least arity)
-    public InterpretedIRMethod(IRScope method, Visibility visibility, RubyModule implementationClass) {
-        this(method, visibility, implementationClass, false);
+        this(method, Visibility.PRIVATE, implementationClass);
     }
     
     public IRScope getIRMethod() {
@@ -90,19 +79,23 @@ public class InterpretedIRMethod extends DynamicMethod implements IRMethodArgs {
             displayedCFG = true;
         }
 
-        // SSS FIXME: Is this correct?
-        if (isTopLevel) context.getRuntime().getObject().setConstantQuiet("TOPLEVEL_BINDING", context.getRuntime().newBinding(context.currentBinding()));
-
+        boolean hasExplicitCallProtocol = method.hasExplicitCallProtocol();
         try {
             // update call stacks (push: frame, class, scope, etc.)
-            RubyModule implementationClass = getImplementationClass();
-            context.preMethodFrameAndScope(implementationClass, name, self, block, method.getStaticScope());
+            RubyModule  implClass   = getImplementationClass();
+            StaticScope staticScope = method.getStaticScope();
+            if (hasExplicitCallProtocol) {
+                context.preMethodFrameAndClass(implClass, name, self, block, staticScope);
+            } else {
+                context.preMethodFrameAndScope(implClass, name, self, block, staticScope);
+            }
             context.setCurrentVisibility(getVisibility());
-            return Interpreter.INTERPRET_METHOD(context, method, self, name, implementationClass, args, block, null, false);
+            return Interpreter.INTERPRET_METHOD(context, method, self, name, implClass, args, block, null, false);
         } finally {
             // update call stacks (pop: ..)
             context.popFrame();
-            context.postMethodScopeOnly();
+            context.popRubyClass();
+            if (!hasExplicitCallProtocol) context.popScope();
         }
     }
 
@@ -110,4 +103,12 @@ public class InterpretedIRMethod extends DynamicMethod implements IRMethodArgs {
     public DynamicMethod dup() {
         return new InterpretedIRMethod(method, visibility, implementationClass);
     }
+
+    public String getFile() {
+        return method.getFileName();
+    }
+
+    public int getLine() {
+        return method.getLineNumber();
+   }
 }

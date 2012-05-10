@@ -56,6 +56,7 @@ public class OutputStrings {
                 .append("  --profile.api   activate Ruby profiler API\n")
                 .append("  --profile.flat  synonym for --profile\n")
                 .append("  --profile.graph run with instrumented (timed) profiling, graph format\n")
+                .append("  --profile.html  run with instrumented (timed) profiling, graph format in HTML\n")
                 .append("  --client        use the non-optimizing \"client\" JVM\n")
                 .append("                    (improves startup; default)\n")
                 .append("  --server        use the optimizing \"server\" JVM (improves perf)\n")
@@ -105,23 +106,29 @@ public class OutputStrings {
     }
 
     public static String getVersionString(CompatVersion compatVersion) {
-        String ver = null;
+        String ver;
         String patchDelimeter = "-p";
-        int patchlevel = 0;
+        int patchlevel;
+        String versionString = "";
         switch (compatVersion) {
         case RUBY1_8:
             ver = Constants.RUBY_VERSION;
             patchlevel = Constants.RUBY_PATCHLEVEL;
+            versionString = String.format("ruby-%s%s%d", ver, patchDelimeter, patchlevel);
             break;
         case RUBY1_9:
             ver = Constants.RUBY1_9_VERSION;
             patchlevel = Constants.RUBY1_9_PATCHLEVEL;
+            versionString = String.format("ruby-%s%s%d", ver, patchDelimeter, patchlevel);
+            break;
+        case RUBY2_0:
+            versionString = String.format("ruby-%s", Constants.RUBY2_0_VERSION);
             break;
         }
 
         String fullVersion = String.format(
-                "jruby %s (ruby-%s%s%d) (%s %s) (%s %s) [%s-%s-java]",
-                Constants.VERSION, ver, patchDelimeter, patchlevel,
+                "jruby %s (%s) (%s %s) (%s %s) [%s-%s-java]",
+                Constants.VERSION, versionString,
                 Constants.COMPILE_DATE, Constants.REVISION,
                 System.getProperty("java.vm.name"), System.getProperty("java.version"),
                 Platform.getOSName(),

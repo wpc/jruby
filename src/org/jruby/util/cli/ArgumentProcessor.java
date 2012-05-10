@@ -28,17 +28,19 @@
  ***** END LICENSE BLOCK *****/
 package org.jruby.util.cli;
 
-import java.io.File;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
 import org.jruby.CompatVersion;
+import org.jruby.Ruby;
 import org.jruby.RubyInstanceConfig;
 import org.jruby.exceptions.MainExitException;
 import org.jruby.util.JRubyFile;
 import org.jruby.util.KCode;
 import org.jruby.util.SafePropertyAccessor;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * Encapsulated logic for processing JRuby's command-line arguments.
@@ -343,6 +345,8 @@ public class ArgumentProcessor {
                         config.setCompileMode(RubyInstanceConfig.CompileMode.OFFIR);
                     } else if (extendedOption.equals("+C")) {
                         config.setCompileMode(RubyInstanceConfig.CompileMode.FORCE);
+                    } else if (extendedOption.equals("+CIR")) {
+                        config.setCompileMode(RubyInstanceConfig.CompileMode.FORCEIR);
                     } else {
                         MainExitException mee = new MainExitException(1, "jruby: invalid extended option " + extendedOption + " (-X will list valid options)\n");
                         mee.setUsageError(true);
@@ -403,8 +407,14 @@ public class ArgumentProcessor {
                     } else if (argument.equals("--profile.graph")) {
                         config.setProfilingMode(RubyInstanceConfig.ProfilingMode.GRAPH);
                         break FOR;
+                    } else if (argument.equals("--profile.html")) {
+                        config.setProfilingMode(RubyInstanceConfig.ProfilingMode.HTML);
+                        break FOR;
                     } else if (argument.equals("--1.9")) {
                         config.setCompatVersion(CompatVersion.RUBY1_9);
+                        break FOR;
+                    } else if (argument.equals("--2.0")) {
+                        config.setCompatVersion(CompatVersion.RUBY2_0);
                         break FOR;
                     } else if (argument.equals("--1.8")) {
                         config.setCompatVersion(CompatVersion.RUBY1_8);
@@ -488,8 +498,12 @@ public class ArgumentProcessor {
         } catch (Exception e) {
             // keep going, try PATH
         }
+        if(Ruby.getClassLoader().getResourceAsStream("bin/" + scriptName) != null){
+            return "classpath:bin/" + scriptName;
+        }
         try {
-            String path = System.getenv("PATH");
+            Object pathObj = config.getEnvironment().get("PATH");
+            String path = pathObj.toString();
             if (path != null) {
                 String[] paths = path.split(System.getProperty("path.separator"));
                 for (int i = 0; i < paths.length; i++) {

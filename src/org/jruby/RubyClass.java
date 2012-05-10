@@ -53,6 +53,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
 import org.jruby.anno.JRubyClass;
 import org.jruby.anno.JRubyMethod;
 import org.jruby.compiler.impl.SkinnyMethodAdapter;
@@ -236,8 +237,8 @@ public class RubyClass extends RubyModule {
     }
 
     public static class VariableAccessor {
-        private String name;
-        private int index;
+        private final String name;
+        private final int index;
         private final int classId;
         public VariableAccessor(String name, int index, int classId) {
             this.index = index;
@@ -268,22 +269,30 @@ public class RubyClass extends RubyModule {
     
     private volatile VariableAccessor objectIdAccessor = VariableAccessor.DUMMY_ACCESSOR;
     
-    private volatile VariableAccessor nativeHandleAccessor = VariableAccessor.DUMMY_ACCESSOR;
+    private volatile VariableAccessor cextHandleAccessor = VariableAccessor.DUMMY_ACCESSOR;
+
+    private volatile VariableAccessor ffiHandleAccessor = VariableAccessor.DUMMY_ACCESSOR;
 
     private synchronized final VariableAccessor allocateVariableAccessor(String name) {
         String[] myVariableNames = variableNames;
+
         int newIndex = myVariableNames.length;
         String[] newVariableNames = new String[newIndex + 1];
+
         VariableAccessor newVariableAccessor = new VariableAccessor(name, newIndex, this.id);
+
         System.arraycopy(myVariableNames, 0, newVariableNames, 0, newIndex);
+
         newVariableNames[newIndex] = name;
         variableNames = newVariableNames;
+
         return newVariableAccessor;
     }
 
     public VariableAccessor getVariableAccessorForWrite(String name) {
         VariableAccessor ivarAccessor = variableAccessors.get(name);
         if (ivarAccessor == null) {
+
             synchronized (this) {
                 Map<String, VariableAccessor> myVariableAccessors = variableAccessors;
                 ivarAccessor = myVariableAccessors.get(name);
@@ -292,8 +301,10 @@ public class RubyClass extends RubyModule {
                     // allocate a new accessor and populate a new table
                     ivarAccessor = allocateVariableAccessor(name);
                     Map<String, VariableAccessor> newVariableAccessors = new HashMap<String, VariableAccessor>(myVariableAccessors.size() + 1);
+
                     newVariableAccessors.putAll(myVariableAccessors);
                     newVariableAccessors.put(name, ivarAccessor);
+
                     variableAccessors = newVariableAccessors;
                 }
             }
@@ -301,28 +312,62 @@ public class RubyClass extends RubyModule {
         return ivarAccessor;
     }
 
+    private synchronized VariableAccessor allocateIdAccessor() {
+        if (objectIdAccessor == VariableAccessor.DUMMY_ACCESSOR) {
+            objectIdAccessor = allocateVariableAccessor("object_id");
+        }
+
+        return objectIdAccessor;
+    }
+
+    private synchronized VariableAccessor allocateCExtHandleAccessor() {
+        if (cextHandleAccessor == VariableAccessor.DUMMY_ACCESSOR) {
+            cextHandleAccessor = allocateVariableAccessor("cext");
+        }
+
+        return cextHandleAccessor;
+    }
+
+    private synchronized VariableAccessor allocateFFIHandleAccessor() {
+        if (ffiHandleAccessor == VariableAccessor.DUMMY_ACCESSOR) {
+            ffiHandleAccessor = allocateVariableAccessor("ffi");
+        }
+
+        return ffiHandleAccessor;
+    }
+
+
     public VariableAccessor getVariableAccessorForRead(String name) {
         VariableAccessor accessor = getVariableAccessorsForRead().get(name);
         if (accessor == null) accessor = VariableAccessor.DUMMY_ACCESSOR;
         return accessor;
     }
 
-    public synchronized VariableAccessor getObjectIdAccessorForWrite() {
-        if (objectIdAccessor == VariableAccessor.DUMMY_ACCESSOR) objectIdAccessor = allocateVariableAccessor("object_id");
-        return objectIdAccessor;
+    public VariableAccessor getObjectIdAccessorForWrite() {
+        VariableAccessor accessor = objectIdAccessor;
+        return accessor != VariableAccessor.DUMMY_ACCESSOR ? accessor : allocateIdAccessor();
     }
 
     public VariableAccessor getObjectIdAccessorForRead() {
         return objectIdAccessor;
     }
 
-    public synchronized VariableAccessor getNativeHandleAccessorForWrite() {
-        if (nativeHandleAccessor == VariableAccessor.DUMMY_ACCESSOR) nativeHandleAccessor = allocateVariableAccessor("native_handle");
-        return nativeHandleAccessor;
+    public VariableAccessor getNativeHandleAccessorForWrite() {
+        VariableAccessor accessor = cextHandleAccessor;
+        return accessor != VariableAccessor.DUMMY_ACCESSOR ? accessor : allocateCExtHandleAccessor();
     }
 
     public VariableAccessor getNativeHandleAccessorForRead() {
-        return nativeHandleAccessor;
+        return cextHandleAccessor;
+    }
+
+    public VariableAccessor getFFIHandleAccessorForWrite() {
+        VariableAccessor accessor = ffiHandleAccessor;
+        return accessor != VariableAccessor.DUMMY_ACCESSOR ? accessor : allocateFFIHandleAccessor();
+    }
+
+    public VariableAccessor getFFIHandleAccessorForRead() {
+        return ffiHandleAccessor;
     }
 
     public int getVariableTableSize() {
@@ -330,9 +375,7 @@ public class RubyClass extends RubyModule {
     }
 
     public int getVariableTableSizeWithExtras() {
-        return variableAccessors.size()
-                + (objectIdAccessor == VariableAccessor.DUMMY_ACCESSOR ? 0 : 1)
-                + (nativeHandleAccessor == VariableAccessor.DUMMY_ACCESSOR ? 0 : 1);
+        return variableNames.length;
     }
 
     public Map<String, VariableAccessor> getVariableTableCopy() {

@@ -6,7 +6,7 @@ require 'tempfile'
 require 'pathname'
 
 class TestFile < Test::Unit::TestCase
-  WINDOWS = Config::CONFIG['host_os'] =~ /Windows|mswin/
+  WINDOWS = RbConfig::CONFIG['host_os'] =~ /Windows|mswin/
 
   def setup
     @teardown_blocks = []
@@ -45,16 +45,28 @@ class TestFile < Test::Unit::TestCase
     assert_equal("/", File.basename("/"))
   end
 
-  def test_expand_path_cross_platform
-    assert_equal(Dir.pwd, File.expand_path(""))
-    assert_equal(Dir.pwd, File.expand_path("."))
-    assert_equal(Dir.pwd, File.expand_path(".", "."))
-    assert_equal(Dir.pwd, File.expand_path("", "."))
-    assert_equal(Dir.pwd, File.expand_path(".", ""))
-    assert_equal(Dir.pwd, File.expand_path("", ""))
+  # Added to add more flexibility on windows.  Depending on subsystem (msys,
+  # cygwin, cmd) environment sometimes we have mixed case drive letters.  Since
+  # windows is still case insensitive, downcasing seems a simple solution.
+  def paths_equal(expected, actual)
+    if WINDOWS
+      assert_equal(expected.downcase, actual.downcase)
+    else
+      assert_equal(expected, actual)
+    end
+  end
 
-    assert_equal(File.join(Dir.pwd, "x/y/z/a/b"), File.expand_path("a/b", "x/y/z"))
-    assert_equal(File.join(Dir.pwd, "bin"), File.expand_path("../../bin", "tmp/x"))
+
+  def test_expand_path_cross_platform
+    paths_equal(Dir.pwd, File.expand_path(""))
+    paths_equal(Dir.pwd, File.expand_path("."))
+    paths_equal(Dir.pwd, File.expand_path(".", "."))
+    paths_equal(Dir.pwd, File.expand_path("", "."))
+    paths_equal(Dir.pwd, File.expand_path(".", ""))
+    paths_equal(Dir.pwd, File.expand_path("", ""))
+
+    paths_equal(File.join(Dir.pwd, "x/y/z/a/b"), File.expand_path("a/b", "x/y/z"))
+    paths_equal(File.join(Dir.pwd, "bin"), File.expand_path("../../bin", "tmp/x"))
 
     # JRUBY-2143
     assert_nothing_raised {
@@ -114,21 +126,21 @@ class TestFile < Test::Unit::TestCase
 
       # JRUBY-546
       current_drive_letter = Dir.pwd[0..2]
-      assert_equal(current_drive_letter, File.expand_path(".", "/"))
-      assert_equal(current_drive_letter, File.expand_path("..", "/"))
-      assert_equal(current_drive_letter, File.expand_path("/", "/"))
-      assert_equal(current_drive_letter, File.expand_path("../..", "/"))
-      assert_equal(current_drive_letter, File.expand_path("../..", "/dir/two"))
-      assert_equal(current_drive_letter + "dir",
+      paths_equal(current_drive_letter, File.expand_path(".", "/"))
+      paths_equal(current_drive_letter, File.expand_path("..", "/"))
+      paths_equal(current_drive_letter, File.expand_path("/", "/"))
+      paths_equal(current_drive_letter, File.expand_path("../..", "/"))
+      paths_equal(current_drive_letter, File.expand_path("../..", "/dir/two"))
+      paths_equal(current_drive_letter + "dir",
         File.expand_path("../..", "/dir/two/three"))
-      assert_equal(current_drive_letter, File.expand_path("/../..", "/"))
-      assert_equal(current_drive_letter + "hello", File.expand_path("hello", "/"))
-      assert_equal(current_drive_letter, File.expand_path("hello/..", "/"))
-      assert_equal(current_drive_letter, File.expand_path("hello/../../..", "/"))
-      assert_equal(current_drive_letter + "three/four",
+      paths_equal(current_drive_letter, File.expand_path("/../..", "/"))
+      paths_equal(current_drive_letter + "hello", File.expand_path("hello", "/"))
+      paths_equal(current_drive_letter, File.expand_path("hello/..", "/"))
+      paths_equal(current_drive_letter, File.expand_path("hello/../../..", "/"))
+      paths_equal(current_drive_letter + "three/four",
         File.expand_path("/three/four", "/dir/two"))
-      assert_equal(current_drive_letter + "two", File.expand_path("/two", "/one"))
-      assert_equal(current_drive_letter + "three/four",
+      paths_equal(current_drive_letter + "two", File.expand_path("/two", "/one"))
+      paths_equal(current_drive_letter + "three/four",
         File.expand_path("/three/four", "/dir/two"))
 
       assert_equal("C:/two", File.expand_path("/two", "C:/one"))
@@ -551,6 +563,11 @@ class TestFile < Test::Unit::TestCase
     assert(!FileTest.exists?("file:/!"))
   end
 
+  def test_file_exists_uri_prefixes
+    assert(File.exists?("file:test/dir with spaces/test_jar.jar!/abc/foo.rb"))
+    assert(File.exists?("jar:file:test/dir with spaces/test_jar.jar!/abc/foo.rb"))
+  end
+
   # JRUBY-2524
   def test_file_stat_uri_prefixes
     assert_raise(Errno::ENOENT) do
@@ -699,10 +716,12 @@ class TestFile < Test::Unit::TestCase
       require abs_path
       assert_equal($test_require_symlink_filename, abs_path)
       abs_path_linked = File.join(Dir.pwd, "linked_file.rb")
-      require abs_path_linked
-      assert_equal($test_require_symlink_filename, abs_path_linked)
-      load abs_path_linked
-      assert_equal($test_require_symlink_filename, abs_path_linked)
+      unless RUBY_VERSION =~ /1\.9/
+        require abs_path_linked
+        assert_equal($test_require_symlink_filename, abs_path_linked)
+        load abs_path_linked
+        assert_equal($test_require_symlink_filename, abs_path_linked)
+      end
     ensure
       File.delete("real_file.rb")
       File.delete("linked_file.rb")
@@ -711,14 +730,16 @@ class TestFile < Test::Unit::TestCase
 
   def test_file_times
     # Note: atime, mtime, ctime are all implemented using modification time
-    assert_nothing_raised {
-      File.mtime("build.xml")
-      File.atime("build.xml")
-      File.ctime("build.xml")
-      File.new("build.xml").mtime
-      File.new("build.xml").atime
-      File.new("build.xml").ctime
-    }
+    assert_nothing_raised do
+      [ "build.xml", "file:test/dir with spaces/test_jar.jar!/abc/foo.rb" ].each do |file|
+        File.mtime(file)
+        File.atime(file)
+        File.ctime(file)
+        File.new(file).mtime
+        File.new(file).atime
+        File.new(file).ctime
+      end
+    end
 
     assert_raises(Errno::ENOENT) { File.mtime("NO_SUCH_FILE_EVER") }
   end
@@ -1021,6 +1042,11 @@ class TestFile < Test::Unit::TestCase
     assert_raises(Errno::ENOENT) { File.open(file_path, "wb") }
   end
 
+  def test_open_file_in_jar
+    File.open('file:test/dir with spaces/test_jar.jar!/abc/foo.rb'){}
+    File.open('jar:file:test/dir with spaces/test_jar.jar!/abc/foo.rb'){}
+  end
+  
   # JRUBY-3634: File.read or File.open with a url to a file resource fails with StringIndexOutOfBounds exception
   def test_file_url
     path = File.expand_path(__FILE__)
@@ -1036,18 +1062,20 @@ class TestFile < Test::Unit::TestCase
   end
 
   #JRUBY-4387, JRUBY-4416
-  def test_file_gets_separator
-    filename = 'gets.out'
-    begin
-      File.open(filename, "wb") do |file|
-        file.print "this is a test\xFFit is only a test\ndoes it work?"
-      end
+  unless RUBY_VERSION =~ /1\.9/
+    def test_file_gets_separator
+      filename = 'gets.out'
+      begin
+        File.open(filename, "wb") do |file|
+          file.print "this is a test\xFFit is only a test\ndoes it work?"
+        end
 
-      file = File.open("gets.out", "rb") do |file|
-        assert_equal("this is a test\377", file.gets("\xFF"))
+        file = File.open("gets.out", "rb") do |file|
+          assert_equal("this is a test\377", file.gets("\xFF"))
+        end
+      ensure
+        File.unlink(filename)
       end
-    ensure
-      File.unlink(filename)
     end
   end
 

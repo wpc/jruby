@@ -43,7 +43,6 @@ import org.jruby.RubyFixnum;
 import org.jruby.RubyIO;
 import org.jruby.RubyKernel;
 import org.jruby.RubyNumeric;
-import org.jruby.RubyObject;
 import org.jruby.RubyString;
 
 import org.jruby.anno.FrameField;
@@ -58,7 +57,6 @@ import static org.jruby.CompatVersion.*;
 import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.util.ByteList;
 import org.jruby.util.TypeConverter;
-import org.jruby.util.io.InvalidValueException;
 import org.jruby.util.io.ModeFlags;
 import org.jruby.util.io.Stream;
 
@@ -122,17 +120,16 @@ public class RubyStringIO extends org.jruby.RubyStringIO {
     }
 
     private void initializeModes(Object modeArgument) {
-        try {
-            if (modeArgument == null) {
-                data.modes = new ModeFlags(RubyIO.getIOModesIntFromString(getRuntime(), "r+"));
-            } else if (modeArgument instanceof Long) {
-                data.modes = new ModeFlags(((Long)modeArgument).longValue());
-            } else {
-                data.modes = new ModeFlags(RubyIO.getIOModesIntFromString(getRuntime(), (String) modeArgument));
-            }
-        } catch (InvalidValueException e) {
-            throw getRuntime().newErrnoEINVALError();
+        Ruby runtime = getRuntime();
+
+        if (modeArgument == null) {
+            data.modes = RubyIO.newModeFlags(runtime, "r+");
+        } else if (modeArgument instanceof Long) {
+            data.modes = RubyIO.newModeFlags(runtime, ((Long) modeArgument).longValue());
+        } else {
+            data.modes = RubyIO.newModeFlags(runtime, (String) modeArgument);
         }
+
         setupModes();
     }
 
@@ -386,11 +383,12 @@ public class RubyStringIO extends org.jruby.RubyStringIO {
 
         if (data.pos < data.internal.getByteList().getRealSize() && !data.eof) {
             boolean isParagraph = false;
+            boolean is19 = runtime.is1_9();
             ByteList sep = ((RubyString)runtime.getGlobalVariables().get("$/")).getByteList();
             IRubyObject sepArg = null;
             int limit = -1;
 
-            if (context.getRuntime().is1_9()) {
+            if (is19) {
                 IRubyObject limitArg = (args.length > 1 ? args[1] :
                                         (args.length > 0 && args[0] instanceof RubyFixnum ? args[0] :
                                          null));
@@ -398,13 +396,10 @@ public class RubyStringIO extends org.jruby.RubyStringIO {
                     limit = RubyNumeric.fix2int(limitArg);
                 }
 
-                sepArg = (args.length > 0 && !(args[0] instanceof RubyFixnum) ? args[0] :
-                          null);
-            }
-            else {
+                sepArg = (args.length > 0 && !(args[0] instanceof RubyFixnum) ? args[0] : null);
+            } else {
                 sepArg = (args.length > 0 ? args[0] : null);
             }
-
 
             if (sepArg != null) {
                 if (sepArg.isNil()) {
@@ -413,7 +408,7 @@ public class RubyStringIO extends org.jruby.RubyStringIO {
                     ByteList buf = data.internal.getByteList().makeShared(
                         (int)data.pos, bytesToUse);
                     data.pos += buf.getRealSize();
-                    return RubyString.newString(runtime, buf);
+                    return makeString(runtime, buf);
                 }
 
                 sep = sepArg.convertToString().getByteList();
@@ -449,6 +444,7 @@ public class RubyStringIO extends org.jruby.RubyStringIO {
             int bytesToUseWithSep = (limit < 0 || limit >= bytesWithSep ? bytesWithSep : limit);
 
             ByteList line = new ByteList(bytesToUseWithSep);
+            if (is19) line.setEncoding(data.internal.getByteList().getEncoding());
             line.append(data.internal.getByteList(), (int)data.pos, bytesToUse);
             data.pos += bytesToUse;
 
@@ -460,7 +456,7 @@ public class RubyStringIO extends org.jruby.RubyStringIO {
                 data.lineno++;
             }
 
-            return RubyString.newString(runtime,line);
+            return makeString(runtime, line);
         }
         return runtime.getNil();
     }
@@ -520,14 +516,9 @@ public class RubyStringIO extends org.jruby.RubyStringIO {
         return getRuntime().getNil();
     }
 
-    @JRubyMethod(name = "path")
+    @JRubyMethod(name = "path", compat = CompatVersion.RUBY1_8)
     public IRubyObject path() {
         return getRuntime().getNil();
-    }
-
-    @JRubyMethod(name = "path", compat = CompatVersion.RUBY1_9)
-    public IRubyObject path19(ThreadContext context) {
-        throw context.getRuntime().newNoMethodError("", "path", null);
     }
 
     @JRubyMethod(name = "pid")
@@ -561,7 +552,7 @@ public class RubyStringIO extends org.jruby.RubyStringIO {
             }
         } else {
             IRubyObject arg = runtime.getGlobalVariables().get("$_");
-            append(context, arg.isNil() ? runtime.newString("nil") : arg);
+            append(context, arg.isNil() ? makeString(runtime, new ByteList(new byte[] {'n', 'i', 'l'})) : arg);
         }
         IRubyObject sep = runtime.getGlobalVariables().get("$\\");
         if (!sep.isNil()) append(context, sep);
@@ -670,6 +661,19 @@ public class RubyStringIO extends org.jruby.RubyStringIO {
             getRuntime().unregisterInspecting(array);
         }
     }
+    
+    // Make string based on internal data encoding (which ironically is its
+    // external encoding.  This seems messy and we should consider a more
+    // uniform method for makeing strings (we have a slightly different variant
+    // of this in RubyIO.
+    private RubyString makeString(Ruby runtime, ByteList buf) {
+        if (runtime.is1_9()) buf.setEncoding(data.internal.getEncoding());
+
+        RubyString str = RubyString.newString(runtime, buf);
+        str.setTaint(true);
+
+        return str;        
+    }
 
     @SuppressWarnings("fallthrough")
     @JRubyMethod(name = "read", optional = 2)
@@ -717,7 +721,7 @@ public class RubyStringIO extends org.jruby.RubyStringIO {
                     buf.setRealSize(0);
                 }
 
-                return getRuntime().newString(buf);
+                return makeString(getRuntime(), buf);
             } else {
                 length -= data.pos;
             }
@@ -769,7 +773,7 @@ public class RubyStringIO extends org.jruby.RubyStringIO {
 
         if (oldLength < 0 || oldLength > length) data.eof = true;
 
-        return originalString != null ? originalString : getRuntime().newString(buf);
+        return originalString != null ? originalString : makeString(getRuntime(), buf);
     }
 
     @JRubyMethod(name="read_nonblock", compat = CompatVersion.RUBY1_9, required = 1, optional = 1)

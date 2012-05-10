@@ -16,6 +16,9 @@ import org.jruby.util.ByteList;
 
 import java.nio.charset.Charset;
 import java.nio.charset.UnsupportedCharsetException;
+import java.util.Iterator;
+import org.jruby.RubyFixnum;
+import org.jruby.ext.nkf.RubyNKF;
 
 public final class EncodingService {
     private final CaseInsensitiveBytesHash<Entry> encodings;
@@ -44,7 +47,8 @@ public final class EncodingService {
 
         Charset javaDefaultCharset = Charset.defaultCharset();
         ByteList javaDefaultBL = new ByteList(javaDefaultCharset.name().getBytes());
-        javaDefault = findEncodingOrAliasEntry(javaDefaultBL).getEncoding();
+        Entry javaDefaultEntry = findEncodingOrAliasEntry(javaDefaultBL);
+        javaDefault = javaDefaultEntry == null ? ascii8bit : javaDefaultEntry.getEncoding();
 
         encodingList = new IRubyObject[encodings.size()];
 
@@ -249,16 +253,47 @@ public final class EncodingService {
         Encoding encoding = null;
         if (arg instanceof RubyEncoding) {
             encoding = ((RubyEncoding) arg).getEncoding();
+        } else if (arg instanceof RubyFixnum && RubyNKF.NKFCharsetMap.containsKey(arg)) {
+            return getEncodingFromNKFId(arg);
         } else if (!arg.isNil()) {
             encoding = arg.convertToString().toEncoding(runtime);
         }
         return encoding;
     }
+    
+    private Encoding getEncodingFromNKFId(IRubyObject id) {
+        String name = RubyNKF.NKFCharsetMap.get(id);
+        HashEntryIterator hei = encodings.entryIterator();
+        while (hei.hasNext()) {
+            CaseInsensitiveBytesHash.CaseInsensitiveBytesHashEntry<Entry> e = 
+                ((CaseInsensitiveBytesHash.CaseInsensitiveBytesHashEntry<Entry>)hei.next());
+            EncodingDB.Entry ee = e.value;
+            String className = ee.getEncodingClass();
+            if (className.equals(name)) {
+                Encoding enc = ee.getEncoding();
+                return enc;
+            }
+        }
+        return null;   
+    }
+
+    public Encoding getEncodingFromString(String string) {
+        if (string == null) return null;
+
+        ByteList name = new ByteList(ByteList.plain(string));
+        checkAsciiEncodingName(name);
+
+        SpecialEncoding special = SpecialEncoding.valueOf(name);
+        if (special != null) {
+            return special.toEncoding(runtime);
+        }
+
+        return findEncodingWithError(name);
+    }
 
     /**
      * Find an encoding given a Ruby object, coercing it to a String in the process.
      *
-     * @param runtime current Ruby instance
      * @param str the object to coerce and use to look up encoding. The coerced String
      * must be ASCII-compatible.
      * @return the Encoding object found, nil (for internal), or raises ArgumentError
@@ -278,7 +313,6 @@ public final class EncodingService {
     /**
      * Find an encoding given a Ruby object, coercing it to a String in the process.
      *
-     * @param runtime current Ruby instance
      * @param str the object to coerce and use to look up encoding. The coerced String
      * must be ASCII-compatible.
      * @return the Encoding object found, nil (for internal), or raises ArgumentError
@@ -298,8 +332,7 @@ public final class EncodingService {
     /**
      * Look up the pre-existing RubyEncoding object for an EncodingDB.Entry.
      *
-     * @param runtime
-     * @param entry
+     * @param str
      * @return
      */
     public IRubyObject rubyEncodingFromObject(IRubyObject str) {
@@ -372,11 +405,10 @@ public final class EncodingService {
     /**
      * Find a non-special encoding, raising argument error if it does not exist.
      *
-     * @param runtime current Ruby instance
      * @param name the name of the encoding to look up
      * @return the Encoding object found, or raises ArgumentError
      */
-    private Encoding findEncodingWithError(ByteList name) {
+    public Encoding findEncodingWithError(ByteList name) {
         return findEntryWithError(name).getEncoding();
     }
 

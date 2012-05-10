@@ -32,8 +32,10 @@
  ***** END LICENSE BLOCK *****/
 package org.jruby.ast;
 
+import java.util.Arrays;
 import java.util.List;
 
+import org.jruby.NativeException;
 import org.jruby.Ruby;
 import org.jruby.RubyException;
 import org.jruby.ast.visitor.NodeVisitor;
@@ -42,6 +44,7 @@ import org.jruby.evaluator.ASTInterpreter;
 import org.jruby.exceptions.JumpException;
 import org.jruby.exceptions.RaiseException;
 import org.jruby.exceptions.Unrescuable;
+import org.jruby.javasupport.Java;
 import org.jruby.javasupport.JavaUtil;
 import org.jruby.javasupport.util.RuntimeHelpers;
 import org.jruby.lexer.yacc.ISourcePosition;
@@ -142,7 +145,7 @@ public class RescueNode extends Node {
                     exceptionRaised = true;
                     break;
                 } catch (JumpException.RetryJump rj) {
-                    // let RescuedBlock continue
+                    continue RescuedBlock;
                 } catch (RaiseException je) {
                     anotherExceptionRaised = true;
                     throw je;
@@ -167,11 +170,6 @@ public class RescueNode extends Node {
 
     private IRubyObject handleException(Ruby runtime, ThreadContext context, IRubyObject self, Block aBlock, RaiseException raiseJump) {
         RubyException raisedException = raiseJump.getException();
-        // TODO: Rubicon TestKernel dies without this line.  A cursory glance implies we
-        // falsely set $! to nil and this sets it back to something valid.  This should 
-        // get fixed at the same time we address bug #1296484.
-        runtime.getGlobalVariables().set("$!", raisedException);
-
         RescueBodyNode cRescueNode = rescueNode;
 
         while (cRescueNode != null) {
@@ -195,7 +193,19 @@ public class RescueNode extends Node {
             IRubyObject[] exceptions = getExceptions(cRescueNode, runtime, context, self, aBlock);
 
             if (RuntimeHelpers.isJavaExceptionHandled(throwable, exceptions, context).isTrue()) {
-                runtime.getGlobalVariables().set("$!", JavaUtil.convertJavaToUsableRubyObject(runtime, throwable));
+                IRubyObject exceptionObj;
+
+                if (exceptions.length == 1 && exceptions[0] == runtime.getNativeException()) {
+                    // wrap Throwable in a NativeException object
+                    exceptionObj = new NativeException(runtime, runtime.getNativeException(), throwable);
+                    ((NativeException)exceptionObj).prepareIntegratedBacktrace(context, throwable.getStackTrace());
+                } else {
+                    // wrap as normal JI object
+                    exceptionObj = Java.getInstance(runtime, throwable);
+                }
+
+                runtime.getGlobalVariables().set("$!", exceptionObj);
+
                 return cRescueNode.interpret(runtime, context, self, aBlock);
             }
 

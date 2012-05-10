@@ -98,8 +98,9 @@ public abstract class Type extends RubyObject {
         } catch (UnsupportedOperationException ex) {
         }
     }
+
     public static final RubyClass getTypeClass(Ruby runtime) {
-        return runtime.getModule("FFI").getClass("Type");
+        return runtime.getFFI().typeClass;
     }
 
     /**
@@ -303,7 +304,7 @@ public abstract class Type extends RubyObject {
             case BUFFER_OUT:
             case POINTER:
             case STRING:
-            case RBXSTRING:
+            case TRANSIENT_STRING:
                 return true;
             default:
                 return false;

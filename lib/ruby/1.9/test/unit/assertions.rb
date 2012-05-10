@@ -10,6 +10,8 @@ module Test
         obj.pretty_inspect.chomp
       end
 
+      MINI_DIR = File.join(File.dirname(File.dirname(File.expand_path(__FILE__))), "minitest") #:nodoc:
+
       UNASSIGNED = Object.new # :nodoc:
 
       # :call-seq:
@@ -30,7 +32,7 @@ module Test
           msg = nil
         when String, Proc
         else
-          bt = caller.reject { |s| s.rindex(MiniTest::MINI_DIR, 0) }
+          bt = caller.reject { |s| s.rindex(MINI_DIR, 0) }
           raise ArgumentError, "assertion message must be String or Proc, but #{msg.class} was given.", bt
         end
         super
@@ -250,7 +252,59 @@ EOT
       #    assert_respond_to("hello", :does_not_exist)  #Fails
       def assert_respond_to obj, meth, msg = nil
         #get rid of overcounting
-        super if !caller[0].rindex(MiniTest::MINI_DIR, 0) || !obj.respond_to?(meth)
+        super if !caller[0].rindex(MINI_DIR, 0) || !obj.respond_to?(meth)
+      end
+
+      # :call-seq:
+      #   assert_send( +send_array+, failure_message = nil )
+      #
+      # Passes if the method send returns a true value.
+      #
+      # +send_array+ is composed of:
+      # * A receiver
+      # * A method
+      # * Arguments to the method
+      #
+      # Example:
+      #   assert_send([[1, 2], :member?, 1]) # -> pass
+      #   assert_send([[1, 2], :member?, 4]) # -> fail
+      def assert_send send_ary, m = nil
+        recv, msg, *args = send_ary
+        m = message(m) {
+          if args.empty?
+            argsstr = ""
+          else
+            (argsstr = mu_pp(args)).sub!(/\A\[(.*)\]\z/m, '(\1)')
+          end
+          "Expected #{mu_pp(recv)}.#{msg}#{argsstr} to return true"
+        }
+        assert recv.__send__(msg, *args), m
+      end
+
+      # :call-seq:
+      #   assert_not_send( +send_array+, failure_message = nil )
+      #
+      # Passes if the method send doesn't return a true value.
+      #
+      # +send_array+ is composed of:
+      # * A receiver
+      # * A method
+      # * Arguments to the method
+      #
+      # Example:
+      #   assert_not_send([[1, 2], :member?, 1]) # -> fail
+      #   assert_not_send([[1, 2], :member?, 4]) # -> pass
+      def assert_not_send send_ary, m = nil
+        recv, msg, *args = send_ary
+        m = message(m) {
+          if args.empty?
+            argsstr = ""
+          else
+            (argsstr = mu_pp(args)).sub!(/\A\[(.*)\]\z/m, '(\1)')
+          end
+          "Expected #{mu_pp(recv)}.#{msg}#{argsstr} to return false"
+        }
+        assert !recv.__send__(msg, *args), m
       end
 
       ms = instance_methods(true).map {|sym| sym.to_s }
@@ -263,7 +317,7 @@ EOT
 
       def build_message(head, template=nil, *arguments) #:nodoc:
         template &&= template.chomp
-        template.gsub(/\?/) { mu_pp(arguments.shift) }
+        template.gsub(/\G((?:[^\\]|\\.)*?)(\\)?\?/) { $1 + ($2 ? "?" : mu_pp(arguments.shift)) }
       end
     end
   end

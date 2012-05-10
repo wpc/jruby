@@ -80,6 +80,7 @@ import org.jruby.util.CRC32Ext;
 import org.jruby.util.IOInputStream;
 import org.jruby.util.IOOutputStream;
 import org.jruby.util.TypeConverter;
+import org.jruby.util.io.EncodingOption;
 import org.jruby.util.io.Stream;
 
 import com.jcraft.jzlib.JZlib;
@@ -246,6 +247,16 @@ public class RubyZlib {
         return recv.getRuntime().newFixnum(ext.getValue());
     }
 
+    @JRubyMethod(compat = RUBY1_9)
+    public static IRubyObject inflate(ThreadContext context, IRubyObject recv, IRubyObject string) {
+        return JZlibInflate.s_inflate(context, recv, string);
+    }
+
+    @JRubyMethod(required = 1, optional = 1, compat = RUBY1_9)
+    public static IRubyObject deflate(IRubyObject recv, IRubyObject[] args) {
+        return JZlibDeflate.s_deflate(recv, args);
+    }
+
     // TODO: com.jcraft.jzlib.CRC32 has this table...
     private final static long[] crctab = new long[]{
         0L, 1996959894L, 3993919788L, 2567524794L, 124634137L, 1886057615L, 3915621685L, 2657392035L, 249268274L, 2044508324L, 3772115230L, 2547177864L, 162941995L, 
@@ -381,7 +392,7 @@ public class RubyZlib {
             return getRuntime().newFixnum(internalAdler());
         }
 
-        @JRubyMethod(name = "finish", backtrace = true)
+        @JRubyMethod(name = "finish")
         public IRubyObject finish(ThreadContext context) {
             checkClosed();
             IRubyObject result = internalFinish();
@@ -490,7 +501,7 @@ public class RubyZlib {
             super(runtime, type);
         }
 
-        @JRubyMethod(name = "inflate", required = 1, meta = true, backtrace = true)
+        @JRubyMethod(name = "inflate", required = 1, meta = true)
         public static IRubyObject s_inflate(ThreadContext context, IRubyObject recv, IRubyObject string) {
             RubyClass klass = (RubyClass) recv;
             JZlibInflate inflate = (JZlibInflate) klass.allocate();
@@ -580,7 +591,7 @@ public class RubyZlib {
             }
         }
 
-        @JRubyMethod(name = "set_dictionary", required = 1, backtrace = true)
+        @JRubyMethod(name = "set_dictionary", required = 1)
         public IRubyObject set_dictionary(ThreadContext context, IRubyObject arg) {
             try {
                 return set_dictionary(arg);
@@ -603,7 +614,7 @@ public class RubyZlib {
             return str;
         }
 
-        @JRubyMethod(name = "inflate", required = 1, backtrace = true)
+        @JRubyMethod(name = "inflate", required = 1)
         public IRubyObject inflate(ThreadContext context, IRubyObject string) {
             ByteList data = null;
             if (!string.isNil()) {
@@ -790,7 +801,7 @@ public class RubyZlib {
         private com.jcraft.jzlib.Deflater flater = null;
         private int flush = JZlib.Z_NO_FLUSH;
 
-        @JRubyMethod(name = "deflate", required = 1, optional = 1, meta = true, backtrace = true)
+        @JRubyMethod(name = "deflate", required = 1, optional = 1, meta = true)
         public static IRubyObject s_deflate(IRubyObject recv, IRubyObject[] args) {
             Ruby runtime = recv.getRuntime();
             args = Arity.scanArgs(runtime, args, 1, 1);
@@ -817,7 +828,7 @@ public class RubyZlib {
             super(runtime, type);
         }
 
-        @JRubyMethod(name = "initialize", optional = 4, visibility = PRIVATE, backtrace = true)
+        @JRubyMethod(name = "initialize", optional = 4, visibility = PRIVATE)
         public IRubyObject _initialize(IRubyObject[] args) {
             args = Arity.scanArgs(getRuntime(), args, 0, 4);
             level = -1;
@@ -921,7 +932,7 @@ public class RubyZlib {
             return getRuntime().getNil();
         }
 
-        @JRubyMethod(name = "set_dictionary", required = 1, backtrace = true)
+        @JRubyMethod(name = "set_dictionary", required = 1)
         public IRubyObject set_dictionary(ThreadContext context, IRubyObject arg) {
             try {
                 byte [] tmp = arg.convertToString().getBytes();
@@ -1137,25 +1148,25 @@ public class RubyZlib {
         protected RubyString nullFreeComment;
         protected IRubyObject realIo;
         protected RubyTime mtime;
-        protected Encoding externalEncoding;
-        protected Encoding internalEncoding;
+        protected Encoding readEncoding;    // enc
+        protected Encoding writeEncoding;   // enc2
         protected boolean sync = false;
 
         public RubyGzipFile(Ruby runtime, RubyClass type) {
             super(runtime, type);
             mtime = RubyTime.newTime(runtime, new DateTime());
-            externalEncoding = null;
-            internalEncoding = null;
+            readEncoding = runtime.getDefaultExternalEncoding();
+            writeEncoding = null;
         }
 
         // c: gzfile_newstr
         protected RubyString newStr(Ruby runtime, ByteList value) {
             if (runtime.is1_9()) {
-                if (externalEncoding == null) {
-                    return RubyString.newString(runtime, value, internalEncoding);
+                if (writeEncoding == null) {
+                    return RubyString.newString(runtime, value, readEncoding);
                 }
                 return RubyString.newStringNoCopy(runtime, RubyString.transcode(
-                        runtime.getCurrentContext(), value, externalEncoding, internalEncoding,
+                        runtime.getCurrentContext(), value, readEncoding, writeEncoding,
                         runtime.getNil()));
             } else {
                 return RubyString.newString(runtime, value);
@@ -1320,10 +1331,10 @@ public class RubyZlib {
             if (args.length > 1) {
                 IRubyObject opt = TypeConverter.checkHashType(getRuntime(), args[args.length - 1]);
                 if (!opt.isNil()) {
-                    RubyIO.EncodingOption enc = RubyIO.extractEncodingOptions(opt);
+                    EncodingOption enc = EncodingOption.getEncodingOptionFromObject(opt);
                     if (enc != null) {
-                        externalEncoding = enc.getExternalEncoding();
-                        internalEncoding = enc.getInternalEncoding();
+                        readEncoding = enc.getExternalEncoding();
+                        writeEncoding = enc.getInternalEncoding();
                     }
                 }
             }
@@ -1342,13 +1353,24 @@ public class RubyZlib {
             }
             return obj;
         }
+   
+        /**
+         * Get position within this stream including that has been read by
+         * users calling read + what jzlib may have speculatively read in
+         * because of buffering.
+         * @return number of bytes
+         */
+        private long internalPosition() {
+            com.jcraft.jzlib.Inflater inflater = io.getInflater();
+            return inflater.getTotalIn() + inflater.getAvailIn();
+        }
 
         @JRubyMethod
         public IRubyObject rewind() {
             Ruby rt = getRuntime();
             // should invoke seek on realIo...
             realIo.callMethod(rt.getCurrentContext(), "seek",
-                    new IRubyObject[]{rt.newFixnum(-io.getTotalIn()), rt.newFixnum(Stream.SEEK_CUR)});
+                    new IRubyObject[]{rt.newFixnum(-internalPosition()), rt.newFixnum(Stream.SEEK_CUR)});
             // ... and then reinitialize
             initialize(realIo);
             return getRuntime().getNil();
@@ -1401,26 +1423,20 @@ public class RubyZlib {
             return internalSepGets(sep, -1);
         }
 
-        private ByteList newExternalByteList() {
+        private ByteList newReadByteList() {
             ByteList byteList = new ByteList();
-            if (externalEncoding != null) byteList.setEncoding(externalEncoding);
+            if (readEncoding != null) byteList.setEncoding(readEncoding);
             return byteList;
         }
 
-        private ByteList newExternalByteList(int size) {
+        private ByteList newReadByteList(int size) {
             ByteList byteList = new ByteList(size);
-            if (externalEncoding != null) byteList.setEncoding(externalEncoding);
-            return byteList;
-        }
-
-        private ByteList newExternalByteList(byte[] buffer, int start, int length, boolean copy) {
-            ByteList byteList = new ByteList(buffer, start, length, copy);
-            if (externalEncoding != null) byteList.setEncoding(externalEncoding);
+            if (readEncoding != null) byteList.setEncoding(readEncoding);
             return byteList;
         }
 
         private IRubyObject internalSepGets(ByteList sep, int limit) throws IOException {
-            ByteList result = newExternalByteList();
+            ByteList result = newReadByteList();
             if (sep.getRealSize() == 0) sep = Stream.PARAGRAPH_SEPARATOR;
             int ce = -1;
             // TODO: CRuby does encoding aware 'gets'. Not yet implemented.
@@ -1521,7 +1537,7 @@ public class RubyZlib {
         }
 
         private IRubyObject readPartial(int len, RubyString outbuf) throws IOException {
-            ByteList val = newExternalByteList(10);
+            ByteList val = newReadByteList(10);
             byte[] buffer = new byte[len];
             int read = bufferedStream.read(buffer, 0, len);
             if (read == -1) {
@@ -1540,7 +1556,7 @@ public class RubyZlib {
         }
 
         private IRubyObject readAll(int limit) throws IOException {
-            ByteList val = newExternalByteList(10);
+            ByteList val = newReadByteList(10);
             int rest = limit == -1 ? BUFF_SIZE : limit;
             byte[] buffer = new byte[rest];
             while (rest > 0) {
@@ -1571,7 +1587,8 @@ public class RubyZlib {
                 offset += read;
             } // hmm...
             this.position += buffer.length;
-            return newStr(getRuntime(), newExternalByteList(buffer, 0, len - toRead, false));
+            // CRuby GzReader#read sets Encoding but GzReader#read(size) does not.
+            return RubyString.newString(getRuntime(), new ByteList(buffer, 0, len - toRead, false));
         }
 
         @JRubyMethod(name = "lineno=", required = 1)
@@ -1870,10 +1887,10 @@ public class RubyZlib {
             if (args.length > 2) {
                 IRubyObject opt = TypeConverter.checkHashType(getRuntime(), args[args.length - 1]);
                 if (!opt.isNil()) {
-                    RubyIO.EncodingOption enc = RubyIO.extractEncodingOptions(opt);
+                    EncodingOption enc = EncodingOption.getEncodingOptionFromObject(opt);
                     if (enc != null) {
-                        externalEncoding = enc.getExternalEncoding();
-                        internalEncoding = enc.getInternalEncoding();
+                        readEncoding = enc.getExternalEncoding();
+                        writeEncoding = enc.getInternalEncoding();
                     }
                     IRubyObject[] newArgs = new IRubyObject[args.length - 1];
                     System.arraycopy(args, 0, newArgs, 0, args.length - 1);
@@ -2078,10 +2095,10 @@ public class RubyZlib {
             ByteList bytes = p1.asString().getByteList();
             Ruby runtime = getRuntime();
             if (runtime.is1_9()) {
-                if (externalEncoding != null
-                        && externalEncoding != runtime.getEncodingService().getAscii8bitEncoding()) {
+                if (writeEncoding != null
+                        && writeEncoding != runtime.getEncodingService().getAscii8bitEncoding()) {
                     bytes = RubyString.transcode(runtime.getCurrentContext(), bytes, null,
-                            externalEncoding, runtime.getNil());
+                            writeEncoding, runtime.getNil());
                 }
             }
             try {

@@ -27,12 +27,15 @@
 
 package org.jruby.runtime.invokedynamic;
 
+import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles.Lookup;
 import java.lang.invoke.MethodType;
 import java.lang.invoke.MutableCallSite;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
+
 import org.jruby.runtime.CallType;
 import org.jruby.runtime.callsite.CacheEntry;
 
@@ -46,8 +49,13 @@ public class JRubyCallSite extends MutableCallSite {
     private final boolean expression;
     private final String name;
     private int clearCount;
+    private static final AtomicLong SITE_ID = new AtomicLong(1);
+    private final long siteID = SITE_ID.getAndIncrement();
+    private final String file;
+    private final int line;
+    private boolean boundOnce = false;
 
-    public JRubyCallSite(Lookup lookup, MethodType type, CallType callType, String name, boolean attrAssign, boolean iterator, boolean expression) {
+    public JRubyCallSite(Lookup lookup, MethodType type, CallType callType, String file, int line, String name, boolean attrAssign, boolean iterator, boolean expression) {
         super(type);
         this.lookup = lookup;
         this.callType = callType;
@@ -55,6 +63,8 @@ public class JRubyCallSite extends MutableCallSite {
         this.iterator = iterator;
         this.expression = expression;
         this.name = name;
+        this.file = file;
+        this.line = line;
     }
     
     public Lookup lookup() {
@@ -93,10 +103,6 @@ public class JRubyCallSite extends MutableCallSite {
         return seenTypes.size();
     }
     
-    public synchronized Set<Integer> seenTypes() {
-        return Collections.unmodifiableSet(seenTypes);
-    }
-    
     public synchronized void clearTypes() {
         seenTypes.clear();
         clearCount++;
@@ -104,5 +110,35 @@ public class JRubyCallSite extends MutableCallSite {
     
     public int clearCount() {
         return clearCount;
+    }
+
+    public long siteID() {
+        return siteID;
+    }
+
+    public String file() {
+        return file;
+    }
+
+    public int line() {
+        return line;
+    }
+
+    public boolean boundOnce() {
+        return boundOnce;
+    }
+
+    public void boundOnce(boolean boundOnce) {
+        this.boundOnce = boundOnce;
+    }
+
+    @Override
+    public void setTarget(MethodHandle target) {
+        super.setTarget(target);
+        boundOnce = true;
+    }
+
+    public void setInitialTarget(MethodHandle target) {
+        super.setTarget(target);
     }
 }

@@ -15,10 +15,18 @@ UNINSTALLER_PMDOC = 'JRuby-uninstaller.pmdoc/01uninstaller.xml'
 UNINSTALLER_SCRIPT = 'scripts/uninstaller.postinstall'
 UNINSTALLER_WELCOME= 'Welcome.uninstaller.rtf'
 
+pkgmaker = `mdfind "kMDItemDisplayName=='PackageMaker*'"`.chomp
+if pkgmaker == ""
+  warn 'PackageMaker not found'
+else
+  PKGMAKER=File.join(pkgmaker, 'Contents', 'MacOS', 'PackageMaker')
+end
+
 task :installer => [:macos_installer, :windows_installer]
 
 task :macos_installer do
-  next unless Config::CONFIG['target_os'] =~ /darwin/
+  next unless RbConfig::CONFIG['target_os'] =~ /darwin/
+  next unless defined? PKGMAKER
 
   puts "\nBuilding OS X Installer"
 
@@ -42,8 +50,8 @@ task :macos_installer do
 
     puts "- Building package"
     mkdir_p PKG_DIR
-    sh "time /usr/bin/xcrun packagemaker --no-recommend -v --doc JRuby-installer.pmdoc --out #{PKG_DIR}/JRuby-#{VERSION_JRUBY}.pkg --version #{VERSION_JRUBY}"
-    sh "time /usr/bin/xcrun packagemaker --no-recommend -v --doc JRuby-uninstaller.pmdoc --out #{PKG_DIR}/JRuby-uninstaller-#{VERSION_JRUBY}.pkg --version #{VERSION_JRUBY}"
+    sh "time #{PKGMAKER} --no-recommend -v --doc JRuby-installer.pmdoc --out #{PKG_DIR}/JRuby-#{VERSION_JRUBY}.pkg --version #{VERSION_JRUBY}"
+    sh "time #{PKGMAKER} --no-recommend -v --doc JRuby-uninstaller.pmdoc --out #{PKG_DIR}/JRuby-uninstaller-#{VERSION_JRUBY}.pkg --version #{VERSION_JRUBY}"
 
     rm DMG if File.exist? DMG = File.join(BASE_DIR, DIST_DIR, "JRuby-#{VERSION_JRUBY}.dmg")
     sh "time hdiutil create #{DMG} -volname JRuby-#{VERSION_JRUBY} -fs HFS+ -srcfolder #{PKG_DIR}"

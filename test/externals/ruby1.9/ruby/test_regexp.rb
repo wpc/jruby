@@ -803,8 +803,6 @@ class TestRegexp < Test::Unit::TestCase
     #assert_match(/^(\ufb05)\1\1$/i, "\ufb05\ufb06st") # this must be bug...
     assert_match(/^\ufb05{3}$/i, "\ufb05\ufb06st")
     assert_match(/^\u03b9\u0308\u0301$/i, "\u0390")
-    assert_nothing_raised { 0x03ffffff.chr("utf-8").size }
-    assert_nothing_raised { 0x7fffffff.chr("utf-8").size }
   end
 
   def test_unicode_age
@@ -845,11 +843,18 @@ class TestRegexp < Test::Unit::TestCase
   end
 
   def test_dup_warn
-    assert_in_out_err(%w/-w -U/, "#coding:utf-8\nx=/[\u3042\u3041]/\n!x", [], [])
-    assert_in_out_err(%w/-w -U/, "#coding:utf-8\nx=/[\u3042\u3042]/\n!x", [], /duplicated/u, nil,
-                      encoding: Encoding::UTF_8)
-    assert_in_out_err(%w/-w -U/, "#coding:utf-8\nx=/[\u3042\u3041-\u3043]/\n!x", [], /duplicated/u, nil,
-                      encoding: Encoding::UTF_8)
+    assert_warn(/duplicated/) { Regexp.new('[\u3042\u3043\u3042]') }
+    assert_warn(/duplicated/) { Regexp.new('[\u3042\u3043\u3043]') }
+    assert_warn(/\A\z/) { Regexp.new('[\u3042\u3044\u3043]') }
+    assert_warn(/\A\z/) { Regexp.new('[\u3042\u3045\u3043]') }
+    assert_warn(/\A\z/) { Regexp.new('[\u3042\u3045\u3044]') }
+    assert_warn(/\A\z/) { Regexp.new('[\u3042\u3045\u3043-\u3044]') }
+    assert_warn(/duplicated/) { Regexp.new('[\u3042\u3045\u3042-\u3043]') }
+    assert_warn(/duplicated/) { Regexp.new('[\u3042\u3045\u3044-\u3045]') }
+    assert_warn(/\A\z/) { Regexp.new('[\u3042\u3046\u3044]') }
+    assert_warn(/duplicated/) { Regexp.new('[\u1000-\u2000\u3042-\u3046\u3044]') }
+    assert_warn(/duplicated/) { Regexp.new('[\u3044\u3041-\u3047]') }
+    assert_warn(/duplicated/) { Regexp.new('[\u3042\u3044\u3046\u3041-\u3047]') }
   end
 
   def test_property_warn

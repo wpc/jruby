@@ -30,6 +30,7 @@ package org.jruby.ext.tempfile;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import org.jruby.CompatVersion;
@@ -38,8 +39,8 @@ import org.jruby.RubyArray;
 import org.jruby.RubyClass;
 import org.jruby.RubyFile;
 import org.jruby.RubyFixnum;
+import org.jruby.RubyHash;
 import org.jruby.RubyKernel;
-import org.jruby.RubyTempfile;
 
 import org.jruby.anno.JRubyClass;
 import org.jruby.anno.JRubyMethod;
@@ -51,6 +52,8 @@ import static org.jruby.runtime.Visibility.*;
 import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.util.JRubyFile;
 import org.jruby.util.PhantomReferenceReaper;
+import org.jruby.util.io.EncodingOption;
+import org.jruby.util.io.IOOptions;
 import org.jruby.util.io.InvalidValueException;
 import org.jruby.util.io.ModeFlags;
 import org.jruby.util.io.OpenFile;
@@ -60,7 +63,7 @@ import org.jruby.util.io.OpenFile;
  */
 @JRubyClass(name="Tempfile", parent="File")
 @SuppressWarnings("deprecation")
-public class Tempfile extends RubyTempfile {
+public class Tempfile extends org.jruby.RubyTempfile {
 
     /** Keep strong references to the Reaper until cleanup */
     private static final ConcurrentMap<Reaper, Boolean> referenceSet
@@ -111,7 +114,7 @@ public class Tempfile extends RubyTempfile {
         super(runtime, type);
     }
 
-    @JRubyMethod(required = 1, optional = 1, visibility = PRIVATE)
+    @JRubyMethod(required = 1, optional = 1, visibility = PRIVATE, compat = CompatVersion.RUBY1_8)
     @Override
     public IRubyObject initialize(IRubyObject[] args, Block block) {
         Ruby runtime = getRuntime();
@@ -156,6 +159,31 @@ public class Tempfile extends RubyTempfile {
         }
     }
 
+    @JRubyMethod(required = 1, optional = 2, visibility = PRIVATE, compat = CompatVersion.RUBY1_9)
+    @Override
+    public IRubyObject initialize19(ThreadContext context, IRubyObject[] args, Block block) {
+        RubyHash options = null;
+
+        // check for trailing hash
+        if (args.length > 1) {
+            if (args[args.length - 1] instanceof RubyHash) {
+                options = (RubyHash)args[args.length - 1];
+                args = Arrays.copyOfRange(args, 0, args.length - 1);
+            }
+        }
+
+        initialize(args, block);
+
+        if (options != null) {
+            EncodingOption encodingOption = EncodingOption.getEncodingOptionFromObject(options);
+            if (encodingOption != null) {
+                setEncodingFromOptions(encodingOption);
+            }
+        }
+
+        return this;
+    }
+
     private IRubyObject defaultTmpDir(Ruby runtime, IRubyObject[] args) {
         IRubyObject dir = null;
         if (args.length == 2) {
@@ -172,13 +200,11 @@ public class Tempfile extends RubyTempfile {
     }
 
     private void initializeOpen() {
-        try {
-            ModeFlags modeFlags = new ModeFlags(ModeFlags.RDWR | ModeFlags.EXCL);
-            getRuntime().getPosix().chmod(path, 0600);
-            sysopenInternal(path, modeFlags, 0600);
-        } catch (InvalidValueException e) {
-            throw getRuntime().newErrnoEINVALError();
-        }
+        Ruby runtime = getRuntime();
+
+        IOOptions ioOptions = newIOOptions(runtime, ModeFlags.RDWR | ModeFlags.EXCL);
+        getRuntime().getPosix().chmod(path, 0600);
+        sysopenInternal(path, ioOptions.getModeFlags(), 0600);
     }
 
     /**
@@ -212,11 +238,8 @@ public class Tempfile extends RubyTempfile {
     @JRubyMethod(visibility = PUBLIC)
     public IRubyObject open() {
         if (!isClosed()) close();
-        try {
-            openInternal(path, "r+");
-        } catch (InvalidValueException ex) {
-            throw getRuntime().newErrnoEINVALError();
-        }
+
+        openInternal(path, "r+");
 
         return this;
     }

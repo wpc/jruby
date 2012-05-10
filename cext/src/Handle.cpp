@@ -86,7 +86,7 @@ Handle::specialHandle(VALUE v)
 void
 Handle::makeStrong_(JNIEnv* env)
 {
-    if ((flags & FL_WEAK) != 0) {
+    if (isWeak()) {
         jobject tmp = env->NewLocalRef(obj);
         if (unlikely(env->IsSameObject(tmp, NULL))) {
             rb_raise(rb_eRuntimeError, "weak handle is null");
@@ -97,6 +97,19 @@ Handle::makeStrong_(JNIEnv* env)
         flags &= ~FL_WEAK;
     }
 }
+
+void
+Handle::makeWeak_(JNIEnv* env)
+{
+    if (!isWeak()) {
+        jobject tmp = env->NewLocalRef(obj);
+        env->DeleteGlobalRef(obj);
+        obj = env->NewWeakGlobalRef(tmp);
+        env->DeleteLocalRef(tmp);
+        flags |= FL_WEAK;
+    }
+}
+
 
 RubyFixnum::RubyFixnum(JNIEnv* env, jobject obj_, jlong value_): Handle(env, obj_, T_FIXNUM)
 {
@@ -188,7 +201,7 @@ JNICALL Java_org_jruby_cext_Native_freeHandle(JNIEnv* env, jclass self, jlong ad
 
     TAILQ_REMOVE(&liveHandles, h, all);
 
-    if ((h->flags & FL_WEAK) != 0) {
+    if (h->isWeak()) {
         env->DeleteWeakGlobalRef(h->obj);
     } else {
         env->DeleteGlobalRef(h->obj);
@@ -252,61 +265,3 @@ jruby::runSyncQueue(JNIEnv *env, DataSyncQueue* q)
         d = next;
     }
 }
-
-/*
- * Class:     org_jruby_cext_Native
- * Method:    newRString
- * Signature: ()J
- */
-extern "C" JNIEXPORT jlong JNICALL
-Java_org_jruby_cext_Native_newRString(JNIEnv* env, jclass self)
-{
-    return p2j(calloc(1, sizeof(struct RString)));
-}
-
-/*
- * Class:     org_jruby_cext_Native
- * Method:    freeRString
- * Signature: (J)V
- */
-extern "C" JNIEXPORT void JNICALL
-Java_org_jruby_cext_Native_freeRString(JNIEnv* env, jclass self, jlong address)
-{
-    RString* rstring = (RString *) j2p(address);
-    if (rstring != NULL) {
-        if (rstring->ptr != NULL) {
-            free(rstring->ptr);
-        }
-
-        free(rstring);
-    }
-}
-
-/*
- * Class:     org_jruby_cext_Native
- * Method:    newRArray
- * Signature: ()J
- */
-extern "C" JNIEXPORT jlong JNICALL
-Java_org_jruby_cext_Native_newRArray(JNIEnv* env, jclass self)
-{
-    return p2j(calloc(1, sizeof(struct RArray)));
-}
-
-/*
- * Class:     org_jruby_cext_Native
- * Method:    freeRArray
- * Signature: (J)V
- */
-extern "C" JNIEXPORT void JNICALL
-Java_org_jruby_cext_Native_freeRArray(JNIEnv* env, jclass self, jlong address)
-{
-    RArray* rarray = (RArray *) j2p(address);
-    if (rarray != NULL) {
-        if (rarray->ptr != NULL) {
-            free(rarray->ptr);
-        }
-        free(rarray);
-    }
-}
-

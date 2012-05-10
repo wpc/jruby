@@ -279,15 +279,6 @@
     <orderEntry type="module-library">
       <library>
         <CLASSES>
-          <root url="jar://$MODULE_DIR$/build_lib/jline-1.0.jar!/" />
-        </CLASSES>
-        <JAVADOC />
-        <SOURCES />
-      </library>
-    </orderEntry>
-    <orderEntry type="module-library">
-      <library>
-        <CLASSES>
           <root url="jar://$MODULE_DIR$/build_lib/jnr-netdb.jar!/" />
         </CLASSES>
         <JAVADOC />
@@ -382,7 +373,7 @@
     <orderEntry type="module-library">
       <library>
         <CLASSES>
-          <root url="jar://$MODULE_DIR$/build_lib/joda-time-2.0.jar!/" />
+          <root url="jar://$MODULE_DIR$/build_lib/joda-time-2.1.jar!/" />
         </CLASSES>
         <JAVADOC />
         <SOURCES />
@@ -427,7 +418,7 @@
     <orderEntry type="module-library">
       <library>
         <CLASSES>
-          <root url="jar://$MODULE_DIR$/build_lib/snakeyaml-1.9.jar!/" />
+          <root url="jar://$MODULE_DIR$/build_lib/snakeyaml-1.10.jar!/" />
         </CLASSES>
         <JAVADOC />
         <SOURCES />
@@ -491,6 +482,51 @@
       <library>
         <CLASSES>
           <root url="jar://$MODULE_DIR$/build_lib/invokebinder.jar!/" />
+        </CLASSES>
+        <JAVADOC />
+        <SOURCES />
+      </library>
+    </orderEntry>
+    <orderEntry type="module-library">
+      <library>
+        <CLASSES>
+          <root url="jar://$MODULE_DIR$/build_lib/jnr-enxio.jar!/" />
+        </CLASSES>
+        <JAVADOC />
+        <SOURCES />
+      </library>
+    </orderEntry>
+    <orderEntry type="module-library">
+      <library>
+        <CLASSES>
+          <root url="jar://$MODULE_DIR$/build_lib/jnr-unixsocket.jar!/" />
+        </CLASSES>
+        <JAVADOC />
+        <SOURCES />
+      </library>
+    </orderEntry>
+    <orderEntry type="module-library">
+      <library>
+        <CLASSES>
+          <root url="jar://$MODULE_DIR$/build_lib/jline-2.7-SNAPSHOT.jar!/" />
+        </CLASSES>
+        <JAVADOC />
+        <SOURCES />
+      </library>
+    </orderEntry>
+    <orderEntry type="module-library">
+      <library>
+        <CLASSES>
+          <root url="jar://$MODULE_DIR$/build_lib/bcmail-jdk15-146.jar!/" />
+        </CLASSES>
+        <JAVADOC />
+        <SOURCES />
+      </library>
+    </orderEntry>
+    <orderEntry type="module-library">
+      <library>
+        <CLASSES>
+          <root url="jar://$MODULE_DIR$/build_lib/bcprov-jdk15-146.jar!/" />
         </CLASSES>
         <JAVADOC />
         <SOURCES />

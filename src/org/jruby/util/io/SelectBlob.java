@@ -38,9 +38,11 @@ import org.jruby.runtime.builtin.IRubyObject;
 import java.io.IOException;
 import java.nio.channels.CancelledKeyException;
 import java.nio.channels.Channel;
+import java.nio.channels.IllegalBlockingModeException;
 import java.nio.channels.SelectableChannel;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
+import java.nio.channels.SocketChannel;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
@@ -220,7 +222,7 @@ public class SelectBlob {
 
     private void trySelectWrite(ThreadContext context, Map<Character,Integer> attachment, RubyIO ioObj) throws IOException {
         if (!(ioObj.getChannel() instanceof SelectableChannel)
-                || !registerSelect(context, getSelector(context, (SelectableChannel)ioObj.getChannel()), attachment, ioObj, SelectionKey.OP_WRITE)) {
+                || !registerSelect(context, getSelector(context, (SelectableChannel)ioObj.getChannel()), attachment, ioObj, SelectionKey.OP_WRITE | SelectionKey.OP_CONNECT)) {
             selectedReads++;
             if ((ioObj.getOpenFile().getMode() & OpenFile.WRITABLE) != 0) {
                 getUnselectableWrites()[(Integer)attachment.get('w')] = true;
@@ -263,7 +265,7 @@ public class SelectBlob {
     }
 
     @SuppressWarnings("unchecked")
-    private void processSelectedKeys(Ruby runtime) {
+    private void processSelectedKeys(Ruby runtime) throws IOException {
         if (selector != null) {
             for (Iterator i = selector.selectedKeys().iterator(); i.hasNext();) {
                 SelectionKey key = (SelectionKey) i.next();
@@ -271,16 +273,24 @@ public class SelectBlob {
                 int writeIoIndex = 0;
                 try {
                     int interestAndReady = key.interestOps() & key.readyOps();
-                    if (readArray != null && (interestAndReady & (SelectionKey.OP_READ | SelectionKey.OP_ACCEPT | SelectionKey.OP_CONNECT)) != 0) {
+                    if (readArray != null && (interestAndReady & (SelectionKey.OP_READ | SelectionKey.OP_ACCEPT)) != 0) {
                         readIoIndex = ((Map<Character,Integer>)key.attachment()).get('r');
                         getReadResults().append(readArray.eltOk(readIoIndex));
                         if (pendingReads != null) {
                             pendingReads[readIoIndex] = false;
                         }
                     }
-                    if (writeArray != null && (interestAndReady & (SelectionKey.OP_WRITE)) != 0) {
+                    if (writeArray != null && (interestAndReady & (SelectionKey.OP_WRITE | SelectionKey.OP_CONNECT)) != 0) {
                         writeIoIndex = ((Map<Character,Integer>)key.attachment()).get('w');
                         getWriteResults().append(writeArray.eltOk(writeIoIndex));
+
+                        // not-great logic for JRUBY-5165; we should move finishConnect into RubySocket logic, I think
+                        if (key.channel() instanceof SocketChannel) {
+                            SocketChannel socketChannel = (SocketChannel)key.channel();
+                            if (socketChannel.isConnectionPending()) {
+                                socketChannel.finishConnect();
+                            }
+                        }
                     }
                 } catch (CancelledKeyException cke) {
                     // TODO: is this the right thing to do?
@@ -340,14 +350,22 @@ public class SelectBlob {
         if (readBlocking != null) {
             for (int i = 0; i < readBlocking.length; i++) {
                 if (readBlocking[i] != null) {
-                    ((SelectableChannel) readIOs[i].getChannel()).configureBlocking(readBlocking[i]);
+                    try {
+                        ((SelectableChannel) readIOs[i].getChannel()).configureBlocking(readBlocking[i]);
+                    } catch (IllegalBlockingModeException ibme) {
+                        throw runtime.newConcurrencyError("can not set IO blocking after select; concurrent select detected?");
+                    }
                 }
             }
         }
         if (writeBlocking != null) {
             for (int i = 0; i < writeBlocking.length; i++) {
                 if (writeBlocking[i] != null) {
-                    ((SelectableChannel) writeIOs[i].getChannel()).configureBlocking(writeBlocking[i]);
+                    try {
+                        ((SelectableChannel) writeIOs[i].getChannel()).configureBlocking(writeBlocking[i]);
+                    } catch (IllegalBlockingModeException ibme) {
+                        throw runtime.newConcurrencyError("can not set IO blocking after select; concurrent select detected?");
+                    }
                 }
             }
         }

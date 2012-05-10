@@ -108,6 +108,10 @@ public class RubyGlobal {
             version = runtime.newString(Constants.RUBY1_9_VERSION).freeze(context);
             patchlevel = runtime.newFixnum(Constants.RUBY1_9_PATCHLEVEL);
             break;
+        case RUBY2_0:
+            version = runtime.newString(Constants.RUBY2_0_VERSION).freeze(context);
+            patchlevel = runtime.newFixnum(Constants.RUBY2_0_PATCHLEVEL);
+            break;
         }
         runtime.defineGlobalConstant("RUBY_VERSION", version);
         runtime.defineGlobalConstant("RUBY_PATCHLEVEL", patchlevel);
@@ -137,8 +141,14 @@ public class RubyGlobal {
             RubyInstanceConfig.Verbosity verbosity = runtime.getInstanceConfig().getVerbosity();
             runtime.defineVariable(new WarningGlobalVariable(runtime, "$-W", verbosity));
         }
-		
-        GlobalVariable kcodeGV = new KCodeGlobalVariable(runtime, "$KCODE", runtime.newString("NONE"));
+
+        final GlobalVariable kcodeGV; 
+        if (runtime.is1_9()) {
+            kcodeGV = new NonEffectiveGlobalVariable(runtime, "$KCODE", runtime.getNil());
+        } else {
+            kcodeGV = new KCodeGlobalVariable(runtime, "$KCODE", runtime.newString("NONE"));
+        }
+
         runtime.defineVariable(kcodeGV);
         runtime.defineVariable(new GlobalVariable.Copy(runtime, "$-K", kcodeGV));
         IRubyObject defaultRS = runtime.newString(runtime.getInstanceConfig().getRecordSeparator()).freeze(context);
@@ -191,10 +201,10 @@ public class RubyGlobal {
 
         runtime.defineVariable(new OutputGlobalVariable(runtime, "$stdout", stdout));
         globals.alias("$>", "$stdout");
-        globals.alias("$defout", "$stdout");
+        if (!runtime.is1_9()) globals.alias("$defout", "$stdout");
 
         runtime.defineVariable(new OutputGlobalVariable(runtime, "$stderr", stderr));
-        globals.alias("$deferr", "$stderr");
+        if (!runtime.is1_9()) globals.alias("$deferr", "$stderr");
 
         runtime.defineGlobalConstant("STDIN", stdin);
         runtime.defineGlobalConstant("STDOUT", stdout);
@@ -467,7 +477,7 @@ public class RubyGlobal {
         @Override
         public IRubyObject get() {
             runtime.getWarnings().warn(ID.INEFFECTIVE_GLOBAL, "warning: variable " + name + " is no longer effective");
-            return runtime.getFalse();
+            return value;
         }
     }
 

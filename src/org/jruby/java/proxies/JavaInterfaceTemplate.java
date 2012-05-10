@@ -43,7 +43,7 @@ public class JavaInterfaceTemplate {
     // OLD TODO from Ruby code:
     // This should be implemented in JavaClass.java, where we can
     // check for reserved Ruby names, conflicting methods, etc.
-    @JRubyMethod(backtrace = true, visibility = Visibility.PRIVATE)
+    @JRubyMethod(visibility = Visibility.PRIVATE)
     public static IRubyObject implement(ThreadContext context, IRubyObject self, IRubyObject clazz) {
         Ruby runtime = context.getRuntime();
 
@@ -194,23 +194,25 @@ public class JavaInterfaceTemplate {
 
             // Because we implement Java interfaces now, we need a new === that's
             // aware of those additional "virtual" supertypes
-            clazz.defineAlias("old_eqq", "===");
-            clazz.addMethod("===", new JavaMethodOne(clazz, Visibility.PUBLIC) {
+            if (!clazz.searchMethod("===").isUndefined()) {
+                clazz.defineAlias("old_eqq", "===");
+                clazz.addMethod("===", new JavaMethodOne(clazz, Visibility.PUBLIC) {
 
-                @Override
-                public IRubyObject call(ThreadContext context, IRubyObject self, RubyModule clazz, String name, IRubyObject arg) {
-                    // TODO: WRONG - get interfaces from class
-                    if (arg.respondsTo("java_object")) {
-                        IRubyObject interfaces = self.getMetaClass().getInstanceVariables().getInstanceVariable("@java_interfaces");
-                        assert interfaces instanceof RubyArray : "interface list was not an array";
+                    @Override
+                    public IRubyObject call(ThreadContext context, IRubyObject self, RubyModule clazz, String name, IRubyObject arg) {
+                        // TODO: WRONG - get interfaces from class
+                        if (arg.respondsTo("java_object")) {
+                            IRubyObject interfaces = self.getMetaClass().getInstanceVariables().getInstanceVariable("@java_interfaces");
+                            assert interfaces instanceof RubyArray : "interface list was not an array";
 
-                        return context.getRuntime().newBoolean(((RubyArray) interfaces).op_diff(
-                                ((JavaClass) ((JavaObject) arg.dataGetStruct()).java_class()).interfaces()).equals(RubyArray.newArray(context.getRuntime())));
-                    } else {
-                        return RuntimeHelpers.invoke(context, self, "old_eqq", arg);
+                            return context.getRuntime().newBoolean(((RubyArray) interfaces).op_diff(
+                                    ((JavaClass) ((JavaObject) arg.dataGetStruct()).java_class()).interfaces()).equals(RubyArray.newArray(context.getRuntime())));
+                        } else {
+                            return RuntimeHelpers.invoke(context, self, "old_eqq", arg);
+                        }
                     }
-                }
-            });
+                });
+            }
         }
 
         // Now we add an "implement" and "implement_all" methods to the class
@@ -331,12 +333,12 @@ public class JavaInterfaceTemplate {
         return singleton;
     }
 
-    @JRubyMethod(name = "[]", rest = true, backtrace = true)
+    @JRubyMethod(name = "[]", rest = true)
     public static IRubyObject op_aref(ThreadContext context, IRubyObject self, IRubyObject[] args) {
         return JavaProxy.op_aref(context, self, args);
     }
 
-    @JRubyMethod(rest = true, backtrace = true)
+    @JRubyMethod(rest = true)
     public static IRubyObject impl(ThreadContext context, IRubyObject self, IRubyObject[] args, final Block implBlock) {
         Ruby runtime = context.getRuntime();
 
@@ -366,7 +368,7 @@ public class JavaInterfaceTemplate {
         return implObject;
     }
 
-    @JRubyMethod(name = "new", rest = true, backtrace = true)
+    @JRubyMethod(name = "new", rest = true)
     public static IRubyObject rbNew(ThreadContext context, IRubyObject self, IRubyObject[] args, Block block) {
         Ruby runtime = context.getRuntime();
 

@@ -31,6 +31,8 @@
 package org.jruby.ext.jruby;
 
 import java.io.IOException;
+
+import org.jruby.CompatVersion;
 import org.jruby.ast.RestArgNode;
 import org.jruby.anno.JRubyMethod;
 import org.jruby.anno.JRubyModule;
@@ -58,6 +60,7 @@ import org.jruby.RubySymbol;
 import org.jruby.ast.MultipleAsgn19Node;
 import org.jruby.ast.UnnamedRestArgNode;
 import org.jruby.internal.runtime.methods.MethodArgs2;
+import org.jruby.internal.runtime.methods.IRMethodArgs;
 import org.jruby.java.proxies.JavaProxy;
 import org.jruby.javasupport.util.RuntimeHelpers;
 import org.jruby.runtime.load.Library;
@@ -95,7 +98,7 @@ public class JRubyLibrary implements Library {
     public static IRubyObject reference(ThreadContext context, IRubyObject recv, IRubyObject obj) {
         Ruby runtime = context.getRuntime();
 
-        return Java.getInstance(runtime, obj, true);
+        return Java.getInstance(runtime, obj, false);
     }
 
     /**
@@ -130,6 +133,11 @@ public class JRubyLibrary implements Library {
         }
 
         return (IRubyObject)unwrapped;
+    }
+
+    @JRubyMethod(module = true, compat = CompatVersion.RUBY2_0)
+    public static IRubyObject ruby2_0(ThreadContext context, IRubyObject recv) {
+        return context.runtime.newString("Welcome to the future of Ruby!");
     }
     
     public static class MethodExtensions {
@@ -189,6 +197,12 @@ public class JRubyLibrary implements Library {
 
                 if (args.getBlock() != null) {
                     argsArray.append(RubyArray.newArray(runtime, block, getNameFrom(runtime, args.getBlock())));
+                }
+            } else if (method instanceof IRMethodArgs) {
+                for (String[] argParam: ((IRMethodArgs)method).getParameterList()) {
+                    RubySymbol argType = runtime.newSymbol(argParam[0]);
+                    if (argParam[1] == "") argsArray.append(RubyArray.newArray(runtime, argType));
+                    else argsArray.append(RubyArray.newArray(runtime, argType, runtime.newSymbol(argParam[1])));
                 }
             } else {
                 if (method.getArity() == Arity.OPTIONAL) {

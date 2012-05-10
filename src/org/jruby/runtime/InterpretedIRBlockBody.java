@@ -5,13 +5,13 @@ import org.jruby.RubyArray;
 import org.jruby.RubyModule;
 import org.jruby.javasupport.util.RuntimeHelpers;
 import org.jruby.common.IRubyWarnings.ID;
-import org.jruby.compiler.ir.IRClosure;
-import org.jruby.interpreter.Interpreter;
+import org.jruby.ir.IRClosure;
+import org.jruby.ir.interpreter.Interpreter;
 import org.jruby.runtime.Block.Type;
 import org.jruby.runtime.builtin.IRubyObject;
 
 public class InterpretedIRBlockBody extends ContextAwareBlockBody {
-    private final IRClosure closure;
+    protected final IRClosure closure;
 
     public InterpretedIRBlockBody(IRClosure closure, Arity arity, int argumentType) {
         super(closure.getStaticScope(), arity, argumentType);
@@ -199,6 +199,6 @@ public class InterpretedIRBlockBody extends ContextAwareBlockBody {
 
     @Override
     public int getLine() {
-        return closure.getLine();
+        return closure.getLineNumber();
     }
 }

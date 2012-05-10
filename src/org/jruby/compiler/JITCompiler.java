@@ -37,7 +37,12 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import org.jruby.Ruby;
 import org.jruby.RubyModule;
@@ -54,10 +59,12 @@ import org.jruby.internal.runtime.methods.CallConfiguration;
 import org.jruby.internal.runtime.methods.DefaultMethod;
 import org.jruby.parser.StaticScope;
 import org.jruby.runtime.ThreadContext;
+import org.jruby.threading.DaemonThreadFactory;
 import org.jruby.util.ClassCache;
 import org.jruby.util.JavaNameMangler;
 import org.jruby.util.cli.Options;
 import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.util.TraceClassVisitor;
 import org.jruby.util.log.Logger;
 import org.jruby.util.log.LoggerFactory;
@@ -81,6 +88,13 @@ public class JITCompiler implements JITCompilerMBean {
     }
 
     private final JITCounts counts = new JITCounts();
+    private final ExecutorService executor = new ThreadPoolExecutor(
+                    2, // always two threads
+                    2,
+                    0, // never stop
+                    TimeUnit.SECONDS,
+                    new LinkedBlockingQueue<Runnable>(),
+                    new DaemonThreadFactory("JRubyJIT"));
     
     public JITCompiler(Ruby ruby) {
         ruby.getBeanManager().register(this);
@@ -89,6 +103,12 @@ public class JITCompiler implements JITCompilerMBean {
     public void tryJIT(DefaultMethod method, ThreadContext context, String className, String methodName) {
         if (context.getRuntime().getInstanceConfig().getCompileMode().shouldJIT()) {
             jitIsEnabled(method, context, className, methodName);
+        }
+    }
+
+    public void tearDown() {
+        if (executor != null) {
+            executor.shutdown();
         }
     }
 
@@ -187,10 +207,10 @@ public class JITCompiler implements JITCompilerMBean {
         // if background JIT is enabled and threshold is > 0 and we have an executor...
         if (config.getJitBackground() &&
                 config.getJitThreshold() > 0 &&
-                runtime.getExecutor() != null) {
+                executor != null) {
             // JIT in background
             try {
-                runtime.getExecutor().submit(jitTask);
+                executor.submit(jitTask);
             } catch (RejectedExecutionException ree) {
                 // failed to submit, just run it directly
                 jitTask.run();
@@ -254,7 +274,13 @@ public class JITCompiler implements JITCompilerMBean {
     public static class JITClassGenerator implements ClassCache.ClassGenerator {
         public JITClassGenerator(String className, String methodName, String key, Ruby ruby, DefaultMethod method, JITCounts counts) {
             this.packageName = JITCompiler.RUBY_JIT_PREFIX;
-            this.digestString = getHashForString(key);
+            if (RubyInstanceConfig.JAVA_VERSION == Opcodes.V1_7) {
+                // recent Java 7 seems to have a bug that leaks definitions across cousin classloaders
+                // so we force the class name to be unique to this runtime
+                digestString = getHashForString(key) + Math.abs(ruby.hashCode());
+            } else {
+                digestString = getHashForString(key);
+            }
             this.className = packageName + "/" + className.replace('.', '/') + "#" + JavaNameMangler.mangleMethodName(methodName) + "_" + digestString;
             this.name = this.className.replaceAll("/", ".");
             this.bodyNode = method.getBodyNode();

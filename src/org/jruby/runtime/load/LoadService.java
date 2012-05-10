@@ -367,6 +367,11 @@ public class LoadService {
     };
 
     private RequireState requireCommon(String requireName, boolean circularRequireWarning) {
+        // check for requiredName without extension.
+        if (featureAlreadyLoaded(requireName)) {
+            return RequireState.ALREADY_LOADED;
+        }
+
         if (!requireLocks.lock(requireName)) {
             if (circularRequireWarning && runtime.isVerbose() && runtime.is1_9()) {
                 warnCircularRequire(requireName);
@@ -378,7 +383,7 @@ public class LoadService {
                 throw runtime.newLoadError("no such file to load -- " + requireName);
             }
 
-            // check for requiredName without extension.
+            // check for requiredName again now that we're locked
             if (featureAlreadyLoaded(requireName)) {
                 return RequireState.ALREADY_LOADED;
             }
@@ -1161,8 +1166,7 @@ public class LoadService {
         Outer: for (int i = 0; i < loadPath.size(); i++) {
             // TODO this is really inefficient, and potentially a problem everytime anyone require's something.
             // we should try to make LoadPath a special array object.
-            RubyString entryString = loadPath.eltInternal(i).convertToString();
-            String loadPathEntry = entryString.asJavaString();
+            String loadPathEntry = getLoadPathEntry(loadPath.eltInternal(i));
 
             if (loadPathEntry.equals(".") || loadPathEntry.equals("")) {
                 foundResource = tryResourceFromCWD(state, baseName, suffixType);
@@ -1177,11 +1181,14 @@ public class LoadService {
                 }
             } else {
                 boolean looksLikeJarURL = loadPathLooksLikeJarURL(loadPathEntry);
+                boolean looksLikeClasspathURL = loadPathLooksLikeClasspathURL(loadPathEntry);
                 for (String suffix : suffixType.getSuffixes()) {
                     String namePlusSuffix = baseName + suffix;
 
                     if (looksLikeJarURL) {
                         foundResource = tryResourceFromJarURLWithLoadPath(namePlusSuffix, loadPathEntry);
+                    } else if (looksLikeClasspathURL) {
+                        foundResource = findFileInClasspath(loadPathEntry + "/" + namePlusSuffix);
                     } else {
                         foundResource = tryResourceFromLoadPath(namePlusSuffix, loadPathEntry);
                     }
@@ -1199,6 +1206,11 @@ public class LoadService {
         }
 
         return foundResource;
+    }
+    
+    protected String getLoadPathEntry(IRubyObject entry) {
+        RubyString entryString = entry.convertToString();
+        return entryString.asJavaString();
     }
 
     protected LoadServiceResource tryResourceFromJarURLWithLoadPath(String namePlusSuffix, String loadPathEntry) {
@@ -1247,6 +1259,10 @@ public class LoadService {
 
     protected boolean loadPathLooksLikeJarURL(String loadPathEntry) {
         return loadPathEntry.startsWith("jar:") || loadPathEntry.endsWith(".jar") || (loadPathEntry.startsWith("file:") && loadPathEntry.indexOf("!") != -1);
+    }
+
+    protected boolean loadPathLooksLikeClasspathURL(String loadPathEntry) {
+        return loadPathEntry.startsWith("classpath:");
     }
     
     private String[] splitJarUrl(String loadPathEntry) {
@@ -1363,8 +1379,7 @@ public class LoadService {
         for (int i = 0; i < loadPath.size(); i++) {
             // TODO this is really inefficient, and potentially a problem everytime anyone require's something.
             // we should try to make LoadPath a special array object.
-            RubyString entryString = loadPath.eltInternal(i).convertToString();
-            String entry = entryString.asJavaString();
+            String entry = getLoadPathEntry(loadPath.eltInternal(i));
 
             // if entry is an empty string, skip it
             if (entry.length() == 0) continue;
@@ -1378,12 +1393,15 @@ public class LoadService {
                 entry = entry.substring("classpath:".length());
             }
 
+            String entryName;
             if (name.startsWith(entry)) {
-                name = name.substring(entry.length());
+                entryName = name.substring(entry.length());
+            } else {
+                entryName = name;
             }
 
             // otherwise, try to load from classpath (Note: Jar resources always uses '/')
-            LoadServiceResource foundResource = getClassPathResource(classLoader, entry + "/" + name);
+            LoadServiceResource foundResource = getClassPathResource(classLoader, entry + "/" + entryName);
             if (foundResource != null) {
                 return foundResource;
             }

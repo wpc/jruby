@@ -8,6 +8,8 @@ import java.lang.ref.SoftReference;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Constructor;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import org.jruby.RubyModule;
 import org.jruby.ext.ffi.Type;
 import org.jruby.util.cli.Options;
 
@@ -33,7 +35,7 @@ final class JITHandle {
         return compilationFailed;
     }
 
-    final NativeInvoker compile(com.kenai.jffi.Function function, Signature signature) {
+    final NativeInvoker compile(RubyModule implementationClass, com.kenai.jffi.Function function, Signature signature) {
         if (compilationFailed || (counter.incrementAndGet() < THRESHOLD && !"force".equalsIgnoreCase(Options.COMPILE_MODE.load()))) {
             return null;
         }
@@ -51,17 +53,9 @@ final class JITHandle {
             }
         }
 
-        // Get any result and parameter converters needed
-        NativeDataConverter resultConverter = DataConverters.getResultConverter(signature.getResultType());
-        NativeDataConverter[] parameterConverters = new NativeDataConverter[signature.getParameterCount()];
-        for (int i = 0; i < parameterConverters.length; i++) {
-            Type parameterType = signature.getParameterType(i);
-            parameterConverters[i] = DataConverters.getParameterConverter(parameterType, signature.getEnums());
-        }
-
         try {
-            Constructor<? extends NativeInvoker> cons = compiledClass.getDeclaredConstructor(com.kenai.jffi.Function.class, Signature.class, NativeInvoker.class);
-            return cons.newInstance(function, signature, createFallbackInvoker(function, jitSignature));
+            Constructor<? extends NativeInvoker> cons = compiledClass.getDeclaredConstructor(RubyModule.class, com.kenai.jffi.Function.class, Signature.class);
+            return cons.newInstance(implementationClass, function, signature);
         } catch (Throwable t) {
             throw new RuntimeException(t);
         }
@@ -87,18 +81,5 @@ final class JITHandle {
         }
 
         return new AsmClassBuilder(generator, jitSignature).build();
-    }
-    
-    
-    static NativeInvoker createFallbackInvoker(com.kenai.jffi.Function function, JITSignature signature) {
-        
-        ParameterMarshaller[] parameterMarshallers = new ParameterMarshaller[signature.getParameterCount()];
-        for (int i = 0; i < parameterMarshallers.length; i++) {
-            parameterMarshallers[i] = DefaultMethodFactory.getMarshaller(signature.getParameterType(i));
-        }
-        
-        return new BufferNativeInvoker(function, 
-                DefaultMethodFactory.getFunctionInvoker(signature.getResultType()), 
-                parameterMarshallers);
     }
 }

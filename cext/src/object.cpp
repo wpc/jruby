@@ -19,7 +19,8 @@
  * version 3 along with this work.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-
+#include <stdio.h>
+#include <stdlib.h>
 #include "jruby.h"
 #include "ruby.h"
 #include "JLocalEnv.h"
@@ -270,16 +271,14 @@ extern "C" VALUE
 rb_any_to_s(VALUE obj)
 {
     char* buf;
+    int len = 128, buflen;
 
-    if (asprintf(&buf, "#<%s:%p>", rb_obj_classname(obj), (void *) obj) == -1) {
-        // Could not allocate
-        return rb_str_new("", 0);
-    }
+    do {
+	buf = (char *) alloca(buflen = len);
+        len = snprintf(buf, buflen, "#<%s:%p>", rb_obj_classname(obj), (void *) obj);
+    } while (len >= buflen);
 
-    VALUE result = rb_str_new_cstr(buf);
-    free(buf);
-
-    return result;
+    return rb_str_new_cstr(buf);
 }
 
 extern "C" void
@@ -295,7 +294,7 @@ rb_singleton_class(VALUE obj)
 {
     JLocalEnv env;
 
-    jmethodID IRubyObject_getSingletonClass_method = getMethodID(env, IRubyObject_class, "getSingletonClass",
+    jmethodID IRubyObject_getSingletonClass_method = getCachedMethodID(env, IRubyObject_class, "getSingletonClass",
             "()Lorg/jruby/RubyClass;");
     jobject singleton = env->CallObjectMethod(valueToObject(env, obj), IRubyObject_getSingletonClass_method);
     checkExceptions(env);
@@ -306,11 +305,17 @@ rb_singleton_class(VALUE obj)
 extern "C" VALUE
 rb_class_inherited_p(VALUE mod, VALUE arg)
 {
-    if(TYPE(arg) != T_MODULE && TYPE(arg) != T_CLASS) {
+    if (TYPE(arg) != T_MODULE && TYPE(arg) != T_CLASS) {
         rb_raise(rb_eTypeError, "compared with non class/module");
     }
 
     return callMethodA(mod, "<=", 1, &arg);
+}
+
+extern "C" VALUE 
+rb_class_superclass(VALUE klass)
+{
+    return callMethodA(klass, "superclass", 0, NULL);
 }
 
 extern "C" VALUE
@@ -342,7 +347,7 @@ jruby_infect(VALUE object1, VALUE object2)
 {
     if (OBJ_TAINTED(object1)) {
         JLocalEnv env;
-        jmethodID mid = getMethodID(env, IRubyObject_class, "infectBy",
+        jmethodID mid = getCachedMethodID(env, IRubyObject_class, "infectBy",
             "(Lorg/jruby/runtime/builtin/IRubyObject;)Lorg/jruby/runtime/builtin/IRubyObject;");
         env->CallObjectMethod(valueToObject(env, object2), mid, object1);
         checkExceptions(env);

@@ -162,7 +162,9 @@ public final class ThreadContext {
 
     @Override
     protected void finalize() throws Throwable {
-        thread.dispose();
+        if (thread != null) {
+            thread.dispose();
+        }
     }
     
     public final Ruby getRuntime() {
@@ -547,22 +549,20 @@ public final class ThreadContext {
         return backtrace[backtraceIndex].line;
     }
     
-    public void setFile(String file) {
-        backtrace[backtraceIndex].filename = file;
-    }
-    
     public void setLine(int line) {
         backtrace[backtraceIndex].line = line;
     }
     
     public void setFileAndLine(String file, int line) {
-        backtrace[backtraceIndex].filename = file;
-        backtrace[backtraceIndex].line = line;
+        BacktraceElement b = backtrace[backtraceIndex];
+        b.filename = file;
+        b.line = line;
     }
 
     public void setFileAndLine(ISourcePosition position) {
-        backtrace[backtraceIndex].filename = position.getFile();
-        backtrace[backtraceIndex].line = position.getStartLine();
+        BacktraceElement b = backtrace[backtraceIndex];
+        b.filename = position.getFile();
+        b.line = position.getStartLine();
     }
     
     public Visibility getCurrentVisibility() {
@@ -908,6 +908,14 @@ public final class ThreadContext {
     public void postBsfApply() {
         popFrame();
     }
+
+    public void preMethodFrameAndClass(RubyModule implClass, String name, IRubyObject self, Block block, StaticScope staticScope) {
+        RubyModule ssModule = staticScope.getModule();
+        // FIXME: This is currently only here because of some problems with IOOutputStream writing to a "bare" runtime without a proper scope
+        if (ssModule == null) ssModule = implClass;
+        pushRubyClass(ssModule);
+        pushCallFrame(implClass, name, self, block);
+    }
     
     public void preMethodFrameAndScope(RubyModule clazz, String name, IRubyObject self, Block block, 
             StaticScope staticScope) {
@@ -1244,6 +1252,7 @@ public final class ThreadContext {
      * Return a binding representing the previous call's state
      * @return the current binding
      */
+    @Deprecated
     public Binding previousBinding() {
         Frame frame = getPreviousFrame();
         return new Binding(frame, getPreviousRubyClass(), getCurrentScope(), backtrace[backtraceIndex].clone());
@@ -1254,6 +1263,7 @@ public final class ThreadContext {
      * @param self the self object to use
      * @return the current binding, using the specified self
      */
+    @Deprecated
     public Binding previousBinding(IRubyObject self) {
         Frame frame = getPreviousFrame();
         return new Binding(self, frame, frame.getVisibility(), getPreviousRubyClass(), getCurrentScope(), backtrace[backtraceIndex].clone());
@@ -1306,6 +1316,11 @@ public final class ThreadContext {
     
     public void setRecursiveSet(Set<RecursiveComparator.Pair> recursiveSet) {
         this.recursiveSet = recursiveSet;
+    }
+
+    @Deprecated
+    public void setFile(String file) {
+        backtrace[backtraceIndex].filename = file;
     }
     
     private Set<RecursiveComparator.Pair> recursiveSet;

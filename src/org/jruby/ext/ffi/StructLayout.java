@@ -28,6 +28,7 @@
 
 package org.jruby.ext.ffi;
 
+import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -86,6 +87,8 @@ public final class StructLayout extends Type {
 
     /** The number of reference fields in this struct */
     private final int referenceFieldCount;
+
+    private final boolean isUnion;
 
     /**
      * Registers the StructLayout class in the JRuby runtime.
@@ -165,6 +168,7 @@ public final class StructLayout extends Type {
         List<Member> memberList = new ArrayList<Member>(fields.size());
         Map<IRubyObject, Member> memberStringMap = new HashMap<IRubyObject, Member>(fields.size());
         Map<IRubyObject, Member> memberSymbolMap = new IdentityHashMap<IRubyObject, Member>(fields.size() * 2);
+        int offset = 0;
         
         int index = 0;
         for (IRubyObject obj : fields) {
@@ -188,6 +192,7 @@ public final class StructLayout extends Type {
             memberStringMap.put(f.name, m);
             memberStringMap.put(f.name.asString(), m);
             memberList.add(m);
+            offset = Math.max(offset, f.offset);
         }
 
 
@@ -200,6 +205,7 @@ public final class StructLayout extends Type {
         this.fieldStringMap = Collections.unmodifiableMap(memberStringMap);
         this.fieldSymbolMap = Collections.unmodifiableMap(memberSymbolMap);
         this.members = Collections.unmodifiableList(memberList);
+        this.isUnion = offset == 0 && memberList.size() > 1;
     }
     
     @JRubyMethod(name = "new", meta = true, required = 3, optional = 1)
@@ -278,6 +284,11 @@ public final class StructLayout extends Type {
 
         return offsets;
     }
+
+    @JRubyMethod(name = "offset_of")
+    public IRubyObject offset_of(ThreadContext context, IRubyObject fieldName) {
+        return getField(context.getRuntime(), fieldName).offset(context);
+    }
     
     @JRubyMethod(name = "[]")
     public IRubyObject aref(ThreadContext context, IRubyObject fieldName) {
@@ -291,7 +302,7 @@ public final class StructLayout extends Type {
 
     final IRubyObject getValue(ThreadContext context, IRubyObject name, Storage cache, IRubyObject ptr) {
         if (!(ptr instanceof AbstractMemory)) {
-            throw context.getRuntime().newTypeError(ptr, context.getRuntime().getModule("FFI").getClass("AbstractMemory"));
+            throw context.getRuntime().newTypeError(ptr, context.getRuntime().getFFI().memoryClass);
         }
         
         return getMember(context.getRuntime(), name).get(context, cache, (AbstractMemory) ptr);
@@ -299,10 +310,30 @@ public final class StructLayout extends Type {
 
     final void putValue(ThreadContext context, IRubyObject name, Storage cache, IRubyObject ptr, IRubyObject value) {
         if (!(ptr instanceof AbstractMemory)) {
-            throw context.getRuntime().newTypeError(ptr, context.getRuntime().getModule("FFI").getClass("AbstractMemory"));
+            throw context.getRuntime().newTypeError(ptr, context.getRuntime().getFFI().memoryClass);
         }
         
         getMember(context.getRuntime(), name).put(context, cache, (AbstractMemory) ptr, value);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        if (!super.equals(o)) return false;
+
+        StructLayout that = (StructLayout) o;
+
+        if (fields != null ? !fields.equals(that.fields) : that.fields != null) return false;
+
+        return true;
+    }
+
+    @Override
+    public int hashCode() {
+        int result = super.hashCode();
+        result = 31 * result + (fields != null ? fields.hashCode() : 0);
+        return result;
     }
 
     /**
@@ -365,6 +396,10 @@ public final class StructLayout extends Type {
 
     public final java.util.Collection<Member> getMembers() {
         return members;
+    }
+
+    public final boolean isUnion() {
+        return isUnion;
     }
 
     /**
@@ -589,12 +624,12 @@ public final class StructLayout extends Type {
 
         @Override
         public boolean equals(Object obj) {
-            return obj instanceof Field && ((Field) obj).offset == offset;
+            return obj instanceof Field && ((Field) obj).offset == offset && ((Field) obj).type.equals(type);
         }
 
         @Override
         public int hashCode() {
-            return 53 * 5 + (int) (this.offset ^ (this.offset >>> 32));
+            return 53 * 5 + (int) (this.offset ^ (this.offset >>> 32)) ^ type.hashCode();
         }
 
         /**
@@ -1200,15 +1235,27 @@ public final class StructLayout extends Type {
         }
 
         public void put(ThreadContext context, StructLayout.Storage cache, Member m, AbstractMemory ptr, IRubyObject value) {
-            throw context.getRuntime().newNotImplementedError("Cannot set Struct fields");
+            if (!(value instanceof Struct)) {
+                throw context.getRuntime().newTypeError(value, context.getRuntime().getFFI().structClass);
+            }
+
+            Struct s = (Struct) value;
+            if (!s.getLayout(context).equals(sbv.getStructLayout())) {
+                throw context.getRuntime().newTypeError("incompatible struct layout");
+            }
+
+            ByteBuffer src = s.getMemoryIO().asByteBuffer();
+            if (src.remaining() != sbv.size) {
+                throw context.getRuntime().newRuntimeError("bad size in " + value.getMetaClass().toString());
+            }
+
+            ptr.getMemoryIO().slice(m.offset(), sbv.size).asByteBuffer().put(src);
         }
 
         public IRubyObject get(ThreadContext context, StructLayout.Storage cache, Member m, AbstractMemory ptr) {
             IRubyObject s = cache.getCachedValue(m);
             if (s == null) {
-                s = sbv.getStructClass().newInstance(context,
-                        new IRubyObject[] { ((AbstractMemory) ptr).slice(context.getRuntime(), m.getOffset(ptr)) },
-                        Block.NULL_BLOCK);
+                s = sbv.getStructClass().newInstance(context, ptr.slice(context.getRuntime(), m.getOffset(ptr)), Block.NULL_BLOCK);
                 cache.putCachedValue(m, s);
             }
 

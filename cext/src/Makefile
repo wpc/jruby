@@ -95,7 +95,7 @@ endif
 IFLAGS = -I"$(BUILD_DIR)" -I"$(SRC_DIR)" -I"$(BUILD_DIR)"/jni \
   -I"$(SRC_DIR)"/include -I"$(SRC_DIR)"/include/ruby
 CFLAGS = $(OFLAGS) $(WFLAGS) $(IFLAGS) $(PICFLAGS) $(JDK_INCLUDES) $(ARCHFLAGS)
-CFLAGS += -D_REENTRANT -D_LARGEFILE64_SOURCE -D_GNU_SOURCE
+CFLAGS += -D_REENTRANT -D_LARGEFILE64_SOURCE -D_GNU_SOURCE -ggdb -O0
 CXXFLAGS = $(CFLAGS)
 
 ifeq ($(OS), win64)
@@ -111,7 +111,7 @@ ifeq ($(OS), win64)
   CFLAGS += -mwin32 -D_JNI_IMPLEMENTATION_
   LDFLAGS += -Wl,--add-stdcall-alias
   PICFLAGS=
-  SOFLAGS += -shared -mimpure-text -static-libgcc
+  SOFLAGS += -shared -static-libgcc
   PREFIX =
   JNIEXT=dll
   CXX = x86_64-w64-mingw32-g++ -m64
@@ -146,7 +146,7 @@ ifeq ($(OS), win32)
   CFLAGS += -march=native -mtune=native -D_JNI_IMPLEMENTATION_ -DRUBY_DLLSPEC="__declspec(dllexport)"
   LDFLAGS += -Wl,--add-stdcall-alias
   PICFLAGS=
-  SOFLAGS += -shared -mimpure-text -Wl,--enable-auto-image-base,--enable-auto-import
+  SOFLAGS += -shared -Wl,--enable-auto-image-base,--enable-auto-import
   PREFIX =
   JNIEXT=dll
   LIBS += -lws2_32
@@ -154,26 +154,53 @@ endif
 
 ifeq ($(OS), darwin)
   PLATFORM = Darwin
-  MACSDK = $(firstword $(filter-out %/MacOSX10.4u.sdk, $(wildcard /Developer/SDKs/MacOSX*.sdk)))
-  JDK_INCLUDES = -I$(MACSDK)/System/Library/Frameworks/JavaVM.framework/Headers
-  ARCHES = ppc
-  ifneq ($(findstring $(CPU), i386 x86_64),)
-    ARCHES= i386 x86_64
+  # First try to locate a legacy Xcode 3 install, so a universal binary (ppc + intel) can be built
+  ifneq ($(realpath /Xcode3/usr/bin/gcc),)
+    XCODE=/Xcode3
+  else
+    XCODE=$(shell xcode-select -print-path)
   endif
 
-  CFLAGS += -isysroot $(MACSDK) -DTARGET_RT_MAC_CFM=0 -I/usr/include
+  ifneq ($(realpath $(wildcard $(XCODE)/usr/bin/gcc)),)
+    CC = $(XCODE)/usr/bin/gcc
+    CXX = $(XCODE)/usr/bin/g++
+  else
+    CC = cc
+    CXX = c++
+  endif
+
+  ARCHES =
+  ifneq ($(findstring $(CPU), ppc powerpc),)
+    ARCHES += ppc
+  endif
+  ifneq ($(findstring $(CPU), i386 x86_64),)
+    ARCHES += i386 x86_64
+  endif
+
+  UNIVERSAL_SDK = $(firstword $(strip $(realpath $(XCODE)/SDKs/MacOSX10.5.sdk)))
+  ifneq ($(UNIVERSAL_SDK),)
+    MACSDK = $(UNIVERSAL_SDK)
+    ifeq ($(findstring ppc, $(ARCHES)),)
+      ARCHES += ppc
+    endif
+  else
+    MACSDK = $(firstword $(strip $(wildcard $(XCODE)/SDKs/MacOSX10.*.sdk)) $(strip $(wildcard $(XCODE)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.*.sdk)))
+  endif
+
+  JDK_INCLUDES = -I$(MACSDK)/System/Library/Frameworks/JavaVM.framework/Headers
+  IFLAGS += -isysroot $(MACSDK) -I$(MACSDK)/usr/include
+  CFLAGS += -DTARGET_RT_MAC_CFM=0 
   ARCHFLAGS = $(foreach arch, $(ARCHES),-arch $(arch))
   LDFLAGS = $(foreach arch, $(ARCHES),-arch $(arch)) -dynamiclib -framework JavaVM \
 	-Wl,-syslibroot,$(MACSDK) -mmacosx-version-min=10.5
   JNIEXT = jnilib
-  #CFLAGS += -I$(MACSDK)/System/Library/Frameworks/Kernel.framework/Versions/A/Headers
   PICFLAGS =
   SOFLAGS =
 endif
 
 ifeq ($(OS), linux)
   PLATFORM = $(CPU)-Linux
-  SOFLAGS = -shared -mimpure-text -static-libgcc -Wl,-soname,$(@F) -Wl,-O1
+  SOFLAGS = -shared -static-libgcc -Wl,-soname,$(@F) -Wl,-O1
   CFLAGS += -pthread
 endif
 
@@ -185,7 +212,7 @@ ifeq ($(OS), solaris)
   CC = gcc
   CFLAGS += -D__EXTENSIONS__ 
   LD = /usr/ccs/bin/ld
-  SOFLAGS = -shared -static-libgcc -mimpure-text
+  SOFLAGS = -shared -static-libgcc
   LIBS += -ldl
 endif
 

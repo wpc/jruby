@@ -6,10 +6,13 @@ require 'java'
 require 'jruby/util'
 
 IKVM = java.lang.System.get_property('java.vm.name') =~ /IKVM\.NET/
-WINDOWS = Config::CONFIG['host_os'] =~ /mswin/
+WINDOWS = RbConfig::CONFIG['host_os'] =~ /mswin/
 
 SPEC_DIR = File.join(File.dirname(__FILE__), 'ruby') unless defined?(SPEC_DIR)
 TAGS_DIR = File.join(File.dirname(__FILE__), 'tags') unless defined?(TAGS_DIR)
+
+# Add --1.8 to JRUBY_OPTS env so we can be sure it propagates
+ENV['JRUBY_OPTS'] = ENV['JRUBY_OPTS'].to_s + " --1.8"
 
 class MSpecScript
   # Language features specs
@@ -47,10 +50,8 @@ class MSpecScript
     '^' + SPEC_DIR + '/library/net',
     '^' + SPEC_DIR + '/library/openssl',
     '^' + SPEC_DIR + '/library/ping',
-    '^' + SPEC_DIR + '/library/readline',
 
     # unstable
-    '^' + SPEC_DIR + '/library/socket',
     '^' + SPEC_DIR + '/library/syslog',
 
     # 1.9 feature
@@ -86,7 +87,7 @@ class MSpecScript
   set :ci_files, get(:language) + get(:core) + get(:command_line) + get(:library)
 
   # The default implementation to run the specs.
-  set :target, File.dirname(__FILE__) + '/../bin/' + Config::CONFIG['ruby_install_name'] + Config::CONFIG['EXEEXT']
+  set :target, File.dirname(__FILE__) + '/../bin/' + RbConfig::CONFIG['ruby_install_name'] + RbConfig::CONFIG['EXEEXT']
 
   set :backtrace_filter, /mspec\//
 

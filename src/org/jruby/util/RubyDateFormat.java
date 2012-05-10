@@ -83,6 +83,9 @@ public class RubyDateFormat extends DateFormat {
     private static final int FORMAT_PRECISION = 30;
     private static final int FORMAT_WEEKYEAR = 31;
     private static final int FORMAT_OUTPUT = 32;
+    private static final int FORMAT_COLON_ZONE_OFF = 33;
+    private static final int FORMAT_COLON_COLON_ZONE_OFF = 34;
+    private static final int FORMAT_COLON_COLON_COLON_ZONE_OFF = 35;
 
 
     private static class Token {
@@ -328,6 +331,49 @@ public class RubyDateFormat extends DateFormat {
                     case '%':
                         compiledPattern.add(new Token(FORMAT_STRING, "%"));
                         break;
+                    case ':':
+                        i++;
+                        if(i == len) {
+                            compiledPattern.add(new Token(FORMAT_STRING, "%:"));
+                        } else {
+                            switch (pattern.charAt(i)) {
+                                case 'z':
+                                    compiledPattern.add(new Token(FORMAT_COLON_ZONE_OFF));
+                                    break;
+                                case ':':
+                                    i++;
+                                    if(i == len) {
+                                        compiledPattern.add(new Token(FORMAT_STRING, "%::"));
+                                    } else {
+                                        switch (pattern.charAt(i)) {
+                                            case 'z':
+                                                compiledPattern.add(new Token(FORMAT_COLON_COLON_ZONE_OFF));
+                                                break;
+                                            case ':':
+                                                i++;
+                                                if(i == len) {
+                                                    compiledPattern.add(new Token(FORMAT_STRING, "%:::"));
+                                                } else {
+                                                    switch (pattern.charAt(i)) {
+                                                        case 'z':
+                                                            compiledPattern.add(new Token(FORMAT_COLON_COLON_COLON_ZONE_OFF));
+                                                            break;
+                                                        case ':':
+                                                        default:
+                                                            compiledPattern.add(new Token(FORMAT_STRING, "%:::" + pattern.charAt(i)));
+                                                    }
+                                                }
+                                                break;
+                                            default:
+                                                compiledPattern.add(new Token(FORMAT_STRING, "%::" + pattern.charAt(i)));
+                                        }
+                                    }
+                                    break;
+                                default:
+                                    compiledPattern.add(new Token(FORMAT_STRING, "%:" + pattern.charAt(i)));
+                            }
+                        }
+                        break;
                     default:
                         compiledPattern.add(new Token(FORMAT_STRING, "%" + pattern.charAt(i)));
                     }
@@ -362,9 +408,14 @@ public class RubyDateFormat extends DateFormat {
     }
 
     private DateTime dt;
+    private long nsec;
 
     public void setDateTime(final DateTime dt) {
         this.dt = dt;
+    }
+
+    public void setNSec(long nsec) {
+        this.nsec = nsec;
     }
 
     /**
@@ -374,6 +425,7 @@ public class RubyDateFormat extends DateFormat {
         TimeOutputFormatter formatter = null;
         for (Token token: compiledPattern) {
             String output = null;
+            long value = 0;
             boolean format = true;
 
             switch (token.getFormat()) {
@@ -407,12 +459,12 @@ public class RubyDateFormat extends DateFormat {
                     output = formatSymbols.getShortMonths()[dt.getMonthOfYear()-1];
                     break;
                 case FORMAT_DAY:
-                    int value = dt.getDayOfMonth();
+                    value = dt.getDayOfMonth();
                     output = String.format("%02d", value);
                     break;
                 case FORMAT_DAY_S: 
                     value = dt.getDayOfMonth();
-                    output = (value < 10 ? " " : "") + Integer.toString(value);
+                    output = (value < 10 ? " " : "") + Long.toString(value);
                     break;
                 case FORMAT_HOUR:
                 case FORMAT_HOUR_BLANK:
@@ -463,7 +515,7 @@ public class RubyDateFormat extends DateFormat {
                     break;
                 case FORMAT_SECONDS:
                     value = dt.getSecondOfMinute();
-                    output = (value < 10 ? "0" : "") + Integer.toString(value);
+                    output = (value < 10 ? "0" : "") + Long.toString(value);
                     break;
                 case FORMAT_WEEK_YEAR_M:
                     output = formatWeekYear(java.util.Calendar.MONDAY);
@@ -477,7 +529,7 @@ public class RubyDateFormat extends DateFormat {
                     if (token.getFormat() == FORMAT_DAY_WEEK) {
                         value = value % 7;
                     }
-                    output = Integer.toString(value);
+                    output = Long.toString(value);
                     break;
                 case FORMAT_YEAR_LONG:
                     value = dt.getYear();
@@ -488,19 +540,41 @@ public class RubyDateFormat extends DateFormat {
                     output = String.format("%02d", value);
                     break;
                 case FORMAT_ZONE_OFF:
+                case FORMAT_COLON_ZONE_OFF:
+                case FORMAT_COLON_COLON_ZONE_OFF:
+                case FORMAT_COLON_COLON_COLON_ZONE_OFF:
                     value = dt.getZone().getOffset(dt.getMillis());
                     output = value < 0 ? "-" : "+";
 
                     value = Math.abs(value);
+
+                    // hours
                     if (value / 3600000 < 10) {
                         output += "0";
                     }
                     output += (value / 3600000);
-                    value = value % 3600000 / 60000;
-                    if (value < 10) {
+
+                    // :::z just shows hour
+                    if (token.getFormat() == FORMAT_COLON_COLON_COLON_ZONE_OFF) break;
+
+                    // :z and ::z have colon after hour
+                    if (token.getFormat() == FORMAT_COLON_ZONE_OFF ||
+                            token.getFormat() == FORMAT_COLON_COLON_ZONE_OFF) output += ':';
+
+                    // minutes
+                    if ((value % 3600000 / 60000) < 10) {
                         output += "0";
                     }
-                    output += value;
+                    output += value % 3600000 / 60000;
+
+                    // ::z includes colon and seconds
+                    if (token.getFormat() == FORMAT_COLON_COLON_ZONE_OFF) {
+                        // seconds
+                        if ((value % 60000) < 10) {
+                            output += "0";
+                        }
+                        output += value % 60000;
+                    }
                     break;
                 case FORMAT_ZONE_ID:
                     toAppendTo.append(dt.getZone().getShortName(dt.getMillis()));
@@ -521,7 +595,8 @@ public class RubyDateFormat extends DateFormat {
                     break;
                 case FORMAT_NANOSEC:
                     value = dt.getMillisOfSecond() * 1000000;
-                    String width = "3";
+                    if (ruby_1_9) value += nsec;
+                    String width = ruby_1_9 ? "9" : "3";
                     if (formatter != null) width = formatter.getFormatter();
                     output = formatTruncate(String.valueOf(value), Integer.valueOf(width), "0");
                     break;

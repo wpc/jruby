@@ -64,6 +64,7 @@ import org.jruby.runtime.profile.IProfileData;
 import org.jruby.runtime.profile.AbstractProfilePrinter;
 import org.jruby.runtime.profile.FlatProfilePrinter;
 import org.jruby.runtime.profile.GraphProfilePrinter;
+import org.jruby.runtime.profile.HtmlProfilePrinter;
 import org.jruby.runtime.load.LoadService;
 import org.jruby.runtime.load.LoadService19;
 import org.jruby.util.ClassCache;
@@ -89,7 +90,7 @@ public class RubyInstanceConfig {
         String compatString = Options.COMPAT_VERSION.load();
         compatVersion = CompatVersion.getVersionFromString(compatString);
         if (compatVersion == null) {
-            error.println("Compatibility version `" + compatString + "' invalid; use 1.8 or 1.9. Using 1.8.");
+            error.println("Compatibility version `" + compatString + "' invalid; use 1.8, 1.9, or 2.0. Using 1.8.");
             compatVersion = CompatVersion.RUBY1_8;
         }
 
@@ -476,6 +477,10 @@ public class RubyInstanceConfig {
         else if (profilingMode == ProfilingMode.GRAPH) {
             return new GraphProfilePrinter(profileData.getResults());
         }
+        else if (profilingMode == ProfilingMode.HTML){
+            return new HtmlProfilePrinter(profileData.getResults());
+        }
+
         return null;
     }
     
@@ -1008,6 +1013,24 @@ public class RubyInstanceConfig {
     public void setTraceType(TraceType traceType) {
         this.traceType = traceType;
     }
+
+    /**
+     * Whether to mask .java lines in the Ruby backtrace, as MRI does for C calls.
+     *
+     * @return true if masking; false otherwise
+     */
+    public boolean getBacktraceMask() {
+        return backtraceMask;
+    }
+
+    /**
+     * Set whether to mask .java lines in the Ruby backtrace.
+     *
+     * @param backtraceMask true to mask; false otherwise
+     */
+    public void setBacktraceMask(boolean backtraceMask) {
+        this.backtraceMask = backtraceMask;
+    }
     
     /**
      * Set whether native code is enabled for this config. Disabling it also
@@ -1217,6 +1240,8 @@ public class RubyInstanceConfig {
 
     private TraceType traceType =
             TraceType.traceTypeFor(Options.BACKTRACE_STYLE.load());
+
+    private boolean backtraceMask = Options.BACKTRACE_MASK.load();
     
     private boolean backtraceColor = Options.BACKTRACE_COLOR.load();
 
@@ -1248,15 +1273,15 @@ public class RubyInstanceConfig {
     }
 
     public enum ProfilingMode {
-		OFF, API, FLAT, GRAPH
+		OFF, API, FLAT, GRAPH, HTML
 	}
 
     public enum CompileMode {
-        JIT, FORCE, OFF, OFFIR;
+        JIT, FORCE, FORCEIR, OFF, OFFIR;
 
         public boolean shouldPrecompileCLI() {
             switch (this) {
-            case JIT: case FORCE:
+            case JIT: case FORCE: case FORCEIR:
                 if (DYNOPT_COMPILE_ENABLED) {
                     // don't precompile the CLI script in dynopt mode
                     return false;
@@ -1268,7 +1293,7 @@ public class RubyInstanceConfig {
 
         public boolean shouldJIT() {
             switch (this) {
-            case JIT: case FORCE:
+            case JIT: case FORCE: case FORCEIR:
                 return true;
             }
             return false;
@@ -1578,10 +1603,10 @@ public class RubyInstanceConfig {
     public static final boolean ERRNO_BACKTRACE = Options.ERRNO_BACKTRACE.load();
     
     public static boolean IR_DEBUG = Options.IR_DEBUG.load();
-    public static boolean IR_COMPILER_DEBUG = Options.IR_COMPILER_DEBUG.load(); 
-    public static final boolean IR_LIVE_VARIABLE = Options.IR_PASS_LIVEVARIABLE.load();
-    public static final boolean IR_DEAD_CODE = Options.IR_PASS_DEADCODE.load();
-    public static final String IR_TEST_INLINER = Options.IR_PASS_TESTINLINER.load();
+    public static boolean IR_PROFILE = Options.IR_PROFILE.load();
+    public static boolean IR_COMPILER_DEBUG = Options.IR_COMPILER_DEBUG.load();
+    public static String IR_COMPILER_PASSES = Options.IR_COMPILER_PASSES.load();
+    public static String IR_INLINE_COMPILER_PASSES = Options.IR_INLINE_COMPILER_PASSES.load();
     
     public static final boolean COROUTINE_FIBERS = Options.FIBER_COROUTINES.load();
     

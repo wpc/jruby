@@ -55,6 +55,7 @@ namespace jruby {
     private:
         void Init();
         void makeStrong_(JNIEnv* env);
+        void makeWeak_(JNIEnv* env);
 
 
     public:
@@ -66,9 +67,23 @@ namespace jruby {
             return likely(!SPECIAL_CONST_P(v)) ? (Handle *) v : specialHandle(v);
         }
 
+	inline VALUE asValue() {
+	    return (VALUE) this;
+	}
+
+        inline bool isWeak() {
+            return (flags & FL_WEAK) != 0;
+        }
+
         inline void makeStrong(JNIEnv* env) {
-            if (unlikely((flags & FL_WEAK) != 0)) {
+            if (unlikely(isWeak())) {
                 makeStrong_(env);
+            }
+        }
+
+        inline void makeWeak(JNIEnv* env) {
+            if (unlikely(!isWeak())) {
+                makeWeak_(env);
             }
         }
 
@@ -153,6 +168,7 @@ namespace jruby {
     private:
         struct RWData {
             bool readonly;
+	    bool valid;
             RString* rstring;
             DataSync jsync;
             DataSync nsync;
@@ -170,13 +186,13 @@ namespace jruby {
         bool nsync(JNIEnv* env);
         bool clean(JNIEnv* env);
         int length();
-
     };
 
     class RubyArray : public Handle {
     private:
         struct RWData {
             bool readonly;
+	    bool valid;
             RArray* rarray;
             DataSync jsync;
             DataSync nsync;
@@ -190,6 +206,7 @@ namespace jruby {
         virtual ~RubyArray();
 
         RArray* toRArray(bool readonly);
+        int length();
         void markElements();
         bool jsync(JNIEnv* env);
         bool nsync(JNIEnv* env);

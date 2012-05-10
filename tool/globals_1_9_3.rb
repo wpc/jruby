@@ -13,7 +13,6 @@ STDLIB_FILES = %w[
   date.rb
   debug.rb
   delegate.rb
-  dl.rb
   drb
   drb.rb
   e2mmap.rb
@@ -28,6 +27,7 @@ STDLIB_FILES = %w[
   irb.rb
   logger.rb
   mathn.rb
+  matrix
   matrix.rb
   minitest
   monitor.rb
@@ -85,6 +85,7 @@ STDLIB_FILES = %w[
 
 EXT_FILES = {
   'ext/bigdecimal/lib/bigdecimal' => 'bigdecimal',
+  'ext/dl/lib/dl.rb' => 'dl.rb',
   'ext/dl/lib/dl' => 'dl',
   'ext/pty/lib/expect.rb' => 'expect.rb',
   'ext/nkf/lib/kconv.rb' => 'kconv.rb',
@@ -96,9 +97,6 @@ EXT_FILES = {
   'ext/psych/lib/psych' => 'psych',
   'ext/ripper/lib/ripper.rb' => 'ripper.rb',
   'ext/ripper/lib/ripper' => 'ripper',
-  'ext/syck/lib/syck.rb' => 'syck.rb',
-  'ext/syck/lib/syck' => 'syck',
-  'ext/syck/lib/yaml' => 'yaml',
   'ext/fiddle/lib/fiddle.rb' => 'fiddle.rb',
   'ext/fiddle/lib/fiddle' => 'fiddle'
 }

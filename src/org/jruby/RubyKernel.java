@@ -203,7 +203,7 @@ public class RubyKernel {
     }
 
     private static RubyModule getModuleForAutoload(Ruby runtime, IRubyObject recv) {
-        RubyModule module = recv instanceof RubyModule ? (RubyModule) recv : runtime.getObject();
+        RubyModule module = recv instanceof RubyModule ? (RubyModule) recv : recv.getMetaClass().getRealClass();
         if (module == runtime.getKernel()) {
             // special behavior if calling Kernel.autoload directly
             if (runtime.is1_9()) {
@@ -397,6 +397,21 @@ public class RubyKernel {
             return (RubyFloat)TypeConverter.convertToType19(object, runtime.getFloat(), "to_f");
         }
     }
+    
+    @JRubyMethod(name = "Hash", required = 1, module = true, visibility = PRIVATE, compat = RUBY1_9)
+    public static IRubyObject new_hash(ThreadContext context, IRubyObject recv, IRubyObject arg) {
+        IRubyObject tmp;
+        Ruby runtime = recv.getRuntime();
+        if (arg.isNil()) return RubyHash.newHash(runtime);
+        tmp = TypeConverter.checkHashType(runtime, arg);
+        if (tmp.isNil()) {
+            if (arg instanceof RubyArray && ((RubyArray) arg).isEmpty()) {
+                return RubyHash.newHash(runtime);
+            }
+            throw runtime.newTypeError("can't convert " + arg.getMetaClass() + " into Hash");
+        }
+        return tmp;
+    } 
 
     @JRubyMethod(name = "Integer", required = 1, module = true, visibility = PRIVATE, compat = RUBY1_8)
     public static IRubyObject new_integer(ThreadContext context, IRubyObject recv, IRubyObject object) {
@@ -526,7 +541,7 @@ public class RubyKernel {
                 args = ArgsUtil.popArray(args);
             }
 
-            defout.callMethod(context, "write", RubyKernel.sprintf(recv, args));
+            defout.callMethod(context, "write", RubyKernel.sprintf(context, recv, args));
         }
 
         return context.getRuntime().getNil();
@@ -877,10 +892,16 @@ public class RubyKernel {
 
         RubyString str = RubyString.stringValue(args[0]);
 
-        RubyArray newArgs = context.getRuntime().newArrayNoCopy(args);
-        newArgs.shift(context);
+        IRubyObject arg;
+        if (context.runtime.is1_9() && args.length == 2 && args[1] instanceof RubyHash) {
+            arg = args[1];
+        } else {
+            RubyArray newArgs = context.getRuntime().newArrayNoCopy(args);
+            newArgs.shift(context);
+            arg = newArgs;
+        }
 
-        return str.op_format(context, newArgs);
+        return str.op_format(context, arg);
     }
 
     @JRubyMethod(name = {"raise", "fail"}, optional = 3, module = true, visibility = PRIVATE, omit = true)
@@ -1024,29 +1045,25 @@ public class RubyKernel {
 
         boolean bindingGiven = args.length > 1 && !args[1].isNil();
         Binding binding = bindingGiven ? evalBinding.convertToBinding(args[1]) : context.currentBinding();
+
         if (args.length > 2) {
             // file given, use it and force it into binding
             binding.setFile(args[2].convertToString().toString());
-        } else {
-            // file not given
-            if (bindingGiven) {
-                // binding given, use binding's file
+
+            if (args.length > 3) {
+                // line given, use it and force it into binding
+                // -1 because parser uses zero offsets and other code compensates
+                binding.setLine(((int) args[3].convertToInteger().getLongValue()) - 1);
             } else {
-                // no binding given, use (eval)
-                binding.setFile("(eval)");
-            }
-        }
-        if (args.length > 3) {
-            // file given, use it and force it into binding
-            // -1 because parser uses zero offsets and other code compensates
-            binding.setLine(((int) args[3].convertToInteger().getLongValue()) - 1);
-        } else {
-            if (bindingGiven) {
-                // binding given, use binding's line
-            } else {
-                // no binding given, use 0 for both
+                // filename given, but no line, start from the beginning.
                 binding.setLine(0);
             }
+        } else if (bindingGiven) {
+            // binding given, use binding's file and line-number
+        } else {
+            // no binding given, use (eval) and start from first line.
+            binding.setFile("(eval)");
+            binding.setLine(0);
         }
 
         // set method to current frame's, which should be caller's
@@ -1635,9 +1652,11 @@ public class RubyKernel {
         } catch (Exception e) {
             throw runtime.newErrnoENOENTError("cannot execute");
         }
-        
-        if (nativeFailed) throw runtime.newErrnoENOENTError("cannot execute");
-        
+
+        if (nativeFailed) {
+            throw runtime.newErrnoFromLastPOSIXErrno();
+        }
+
         exit(runtime, new IRubyObject[] {runtime.newFixnum(resultCode)}, true);
 
         // not reached

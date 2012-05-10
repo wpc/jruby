@@ -1,8 +1,7 @@
 package org.jruby.javasupport.util;
 
-import java.util.ArrayList;
-import java.util.StringTokenizer;
 import org.jruby.MetaClass;
+import org.jruby.NativeException;
 import org.jruby.Ruby;
 import org.jruby.RubyArray;
 import org.jruby.RubyBasicObject;
@@ -40,9 +39,11 @@ import org.jruby.exceptions.JumpException;
 import org.jruby.exceptions.RaiseException;
 import org.jruby.exceptions.Unrescuable;
 import org.jruby.internal.runtime.methods.CallConfiguration;
+import org.jruby.internal.runtime.methods.CompiledIRMethod;
 import org.jruby.internal.runtime.methods.DynamicMethod;
 import org.jruby.internal.runtime.methods.UndefinedMethod;
 import org.jruby.internal.runtime.methods.WrapperMethod;
+import org.jruby.ir.operands.UndefinedValue;
 import org.jruby.javasupport.JavaClass;
 import org.jruby.javasupport.JavaUtil;
 import org.jruby.lexer.yacc.ISourcePosition;
@@ -73,6 +74,9 @@ import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.util.ByteList;
 import org.jruby.util.TypeConverter;
 import org.jruby.util.unsafe.UnsafeFactory;
+
+import java.util.ArrayList;
+import java.util.StringTokenizer;
 
 import static org.jruby.runtime.MethodIndex.OP_EQUAL;
 
@@ -386,7 +390,7 @@ public class RuntimeHelpers {
     
     public static RubyClass getSingletonClass(Ruby runtime, IRubyObject receiver) {
         if (receiver instanceof RubyFixnum || receiver instanceof RubySymbol) {
-            throw runtime.newTypeError("no virtual class for " + receiver.getMetaClass().getBaseName());
+            throw runtime.newTypeError(runtime.is1_9() ? "can't define singleton" : ("no virtual class for " + receiver.getMetaClass().getBaseName()));
         } else {
             if (runtime.getSafeLevel() >= 4 && !receiver.isTaint()) {
                 throw runtime.newSecurityError("Insecure: can't extend object.");
@@ -672,7 +676,11 @@ public class RuntimeHelpers {
 
     public static RubyArray ensureMultipleAssignableRubyArray(IRubyObject value, Ruby runtime, boolean masgnHasHead) {
         if (!(value instanceof RubyArray)) {
-            value = ArgsUtil.convertToRubyArray(runtime, value, masgnHasHead);
+            if (runtime.is1_9()) {
+                value = ArgsUtil.convertToRubyArray19(runtime, value, masgnHasHead);
+            } else {
+                value = ArgsUtil.convertToRubyArray(runtime, value, masgnHasHead);                
+            }
         }
         return (RubyArray) value;
     }
@@ -1006,15 +1014,26 @@ public class RuntimeHelpers {
     }
 
     private static boolean checkJavaException(Throwable throwable, IRubyObject catchable, ThreadContext context) {
-        if (context.getRuntime().getException().op_ge(catchable).isTrue() ||
-                context.getRuntime().getObject() == catchable) {
+        Ruby runtime = context.runtime;
+        if (
+                // rescue exception needs to catch Java exceptions
+                runtime.getException() == catchable ||
+
+                // rescue Object needs to catch Java exceptions
+                runtime.getObject() == catchable) {
+
             if (throwable instanceof RaiseException) {
                 return isExceptionHandled(((RaiseException)throwable).getException(), catchable, context).isTrue();
             }
+
             // let Ruby exceptions decide if they handle it
-            return isExceptionHandled(JavaUtil.convertJavaToUsableRubyObject(context.getRuntime(), throwable), catchable, context).isTrue();
-        }
-        if (catchable instanceof RubyClass && catchable.getInstanceVariables().hasInstanceVariable("@java_class")) {
+            return isExceptionHandled(JavaUtil.convertJavaToUsableRubyObject(runtime, throwable), catchable, context).isTrue();
+
+        } else if (runtime.getNativeException() == catchable) {
+            // NativeException catches Java exceptions, lazily creating the wrapper
+            return true;
+
+        } else if (catchable instanceof RubyClass && catchable.getInstanceVariables().hasInstanceVariable("@java_class")) {
             RubyClass rubyClass = (RubyClass)catchable;
             JavaClass javaClass = (JavaClass)rubyClass.getInstanceVariable("@java_class");
             if (javaClass != null) {
@@ -1024,6 +1043,7 @@ public class RuntimeHelpers {
                 }
             }
         }
+
         return false;
     }
     
@@ -1036,7 +1056,7 @@ public class RuntimeHelpers {
             return isExceptionHandled(((RaiseException)currentThrowable).getException(), throwables, context);
         } else {
             for (int i = 0; i < throwables.length; i++) {
-                if (checkJavaException(currentThrowable, throwables[0], context)) {
+                if (checkJavaException(currentThrowable, throwables[i], context)) {
                     return context.getRuntime().getTrue();
                 }
             }
@@ -1108,6 +1128,20 @@ public class RuntimeHelpers {
             exception = ((RaiseException)currentThrowable).getException();
         } else {
             exception = JavaUtil.convertJavaToUsableRubyObject(context.getRuntime(), currentThrowable);
+        }
+        context.setErrorInfo(exception);
+    }
+
+    public static void storeNativeExceptionInErrorInfo(Throwable currentThrowable, ThreadContext context) {
+        IRubyObject exception = null;
+        if (currentThrowable instanceof RaiseException) {
+            exception = ((RaiseException)currentThrowable).getException();
+        } else {
+            Ruby runtime = context.runtime;
+
+            // wrap Throwable in a NativeException object
+            exception = new NativeException(runtime, runtime.getNativeException(), currentThrowable);
+            ((NativeException)exception).prepareIntegratedBacktrace(context, currentThrowable.getStackTrace());
         }
         context.setErrorInfo(exception);
     }
@@ -1563,7 +1597,7 @@ public class RuntimeHelpers {
         preLoadCommon(context, staticScope, wrap);
     }
 
-    private static void preLoadCommon(ThreadContext context, StaticScope staticScope, boolean wrap) {
+    public static void preLoadCommon(ThreadContext context, StaticScope staticScope, boolean wrap) {
         RubyClass objectClass = context.getRuntime().getObject();
         IRubyObject topLevel = context.getRuntime().getTopSelf();
         if (wrap) {
@@ -2019,6 +2053,14 @@ public class RuntimeHelpers {
         return scope;
     }
 
+    public static StaticScope decodeLocalScope(ThreadContext context, StaticScope parent, String scopeString) {
+        String[][] decodedScope = decodeScopeDescriptor(scopeString);
+        StaticScope scope = context.getRuntime().getStaticScopeFactory().newLocalScope(parent, decodedScope[1]);
+        scope.determineModule();
+        setAritiesFromDecodedScope(scope, decodedScope[0]);
+        return scope;
+    }
+
     public static StaticScope decodeBlockScope(ThreadContext context, String scopeString) {
         String[][] decodedScope = decodeScopeDescriptor(scopeString);
         StaticScope scope = context.getRuntime().getStaticScopeFactory().newBlockScope(context.getCurrentScope().getStaticScope(), decodedScope[1]);
@@ -2452,14 +2494,14 @@ public class RuntimeHelpers {
     public static IRubyObject match2AndUpdateScope(IRubyObject receiver, ThreadContext context, IRubyObject value, String scopeOffsets) {
         DynamicScope scope = context.getCurrentScope();
         IRubyObject match = ((RubyRegexp)receiver).op_match(context, value);
-        updateScopeWithCaptures(context, scope, decodeCaptureOffsets(scopeOffsets), value);
+        updateScopeWithCaptures(context, scope, decodeCaptureOffsets(scopeOffsets), match);
         return match;
     }
 
     public static IRubyObject match2AndUpdateScope19(IRubyObject receiver, ThreadContext context, IRubyObject value, String scopeOffsets) {
         DynamicScope scope = context.getCurrentScope();
         IRubyObject match = ((RubyRegexp)receiver).op_match19(context, value);
-        updateScopeWithCaptures(context, scope, decodeCaptureOffsets(scopeOffsets), value);
+        updateScopeWithCaptures(context, scope, decodeCaptureOffsets(scopeOffsets), match);
         return match;
     }
 
@@ -2659,5 +2701,71 @@ public class RuntimeHelpers {
     
     public static RubyString appendAsString19(RubyString target, IRubyObject other) {
         return target.append19(other.asString());
+    }
+
+    /**
+     * We need to splat incoming array to a block when |a, *b| (any required +
+     * rest) or |a, b| (>1 required).
+     */
+    public static boolean needsSplat19(int requiredCount, boolean isRest) {
+        return (isRest && requiredCount > 0) || (!isRest && requiredCount > 1);
+    }
+
+    // . Array given to rest should pass itself
+    // . Array with rest + other args should extract array
+    // . Array with multiple values and NO rest should extract args if there are more than one argument
+    // Note: In 1.9 alreadyArray is only relevent from our internal Java code in core libs.  We never use it
+    // from interpreter or JIT.  FIXME: Change core lib consumers to stop using alreadyArray param.
+    public static IRubyObject[] restructureBlockArgs19(IRubyObject value, boolean needsSplat, boolean alreadyArray) {
+        if (value != null && !(value instanceof RubyArray) && needsSplat) value = RuntimeHelpers.aryToAry(value);
+
+        IRubyObject[] parameters;
+        if (value == null) {
+            parameters = IRubyObject.NULL_ARRAY;
+        } else if (value instanceof RubyArray && (alreadyArray || needsSplat)) {
+            parameters = ((RubyArray) value).toJavaArray();
+        } else {
+            parameters = new IRubyObject[] { value };
+        }
+
+        return parameters;
+    }
+
+    public static boolean BEQ(ThreadContext context, IRubyObject value1, IRubyObject value2) {
+        return value1.op_equal(context, value2).isTrue();
+    }
+
+    public static boolean BNE(ThreadContext context, IRubyObject value1, IRubyObject value2) {
+        boolean eql = value2 == context.nil || value2 == UndefinedValue.UNDEFINED ?
+                value1 == value2 : value1.op_equal(context, value2).isTrue();
+
+        return !eql;
+    }
+
+    public static RubyModule checkIsRubyModule(ThreadContext context, Object object) {
+        if (!(object instanceof RubyModule)) throw context.getRuntime().newTypeError("no outer class/module");
+
+        return (RubyModule)object;
+    }
+
+    public static IRubyObject invokeModuleBody(ThreadContext context, CompiledIRMethod method) {
+        RubyModule implClass = method.getImplementationClass();
+
+        return method.call(context, implClass, implClass, "");
+    }
+
+    public static RubyClass newClassForIR(ThreadContext context, String name, IRubyObject self, RubyModule classContainer, Object superClass, boolean meta) {
+        if (meta) return classContainer.getMetaClass();
+
+        RubyClass sc = null;
+
+        if (superClass != null) {
+            if (!(superClass instanceof RubyClass)) throw context.getRuntime().newTypeError("superclass must be Class (" + superClass + " given)");
+
+            sc = (RubyClass) superClass;
+        }
+
+
+        return classContainer.defineOrGetClassUnder(name, sc);
     }
 }

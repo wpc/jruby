@@ -55,7 +55,9 @@ gc_mark_children(Handle* h)
 
         case T_DATA: {
             RData* rdata = dynamic_cast<RubyData *>(h)->toRData();
-            (*rdata->dmark)(rdata->data);
+            if (rdata->dmark != NULL) {
+	        (*rdata->dmark)(rdata->data);
+	    }
             break;
         }
     }
@@ -85,7 +87,7 @@ rb_gc_mark_maybe(VALUE v)
 
     Handle* h;
     TAILQ_FOREACH(h, &liveHandles, all) {
-        if ((VALUE) h == v) {
+        if (h->asValue() == v) {
             rb_gc_mark(v);
             break;
         }
@@ -102,6 +104,12 @@ extern "C" void
 rb_gc_unregister_address(VALUE *addr)
 {
     globalVariables.remove(addr);
+}
+
+extern "C" void 
+rb_gc() 
+{
+    // We'll let the Java GC decide when to run
 }
 
 extern "C" void
@@ -142,14 +150,16 @@ Java_org_jruby_cext_Native_gc(JNIEnv* env, jobject self)
 
         if ((h->flags & (FL_MARK | FL_CONST)) == 0) {
 
-            if ((h->flags & FL_WEAK) == 0) {
-                h->flags |= FL_WEAK;
-                jobject obj = env->NewWeakGlobalRef(h->obj);
-                env->DeleteGlobalRef(h->obj);
-                h->obj = obj;
-            }
+            h->makeWeak(env);
 
         } else if ((h->flags & FL_MARK) != 0) {
+	    // If the handle was marked, but was not strongly reffed, make it a strong ref again
+            if (h->isWeak()) {
+		jobject tmp = env->NewLocalRef(h->obj);
+		if (!env->IsSameObject(tmp, NULL)) {
+                    h->makeStrong(env);
+		}
+	    }
             h->flags &= ~FL_MARK;
         }
     }

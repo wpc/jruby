@@ -36,7 +36,6 @@ import java.lang.invoke.SwitchPoint;
 import java.math.BigInteger;
 import org.jcodings.Encoding;
 import org.jcodings.EncodingDB;
-import org.jruby.Ruby;
 import org.jruby.RubyClass;
 import org.jruby.RubyEncoding;
 import org.jruby.RubyFixnum;
@@ -59,7 +58,6 @@ import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.runtime.callsite.CacheEntry;
 import org.jruby.util.ByteList;
-import org.jruby.util.JavaNameMangler;
 import org.jruby.util.RegexpOptions;
 import static org.jruby.util.CodegenUtils.*;
 
@@ -86,6 +84,8 @@ public class InvokeDynamicSupport {
     public final static String BOOTSTRAP_STRING_CALLTYPE_SIG = sig(CallSite.class, Lookup.class, String.class, MethodType.class, String.class, CallType.class);
     public final static String BOOTSTRAP_LONG_SIG = sig(CallSite.class, Lookup.class, String.class, MethodType.class, long.class);
     public final static String BOOTSTRAP_DOUBLE_SIG = sig(CallSite.class, Lookup.class, String.class, MethodType.class, double.class);
+    public final static String BOOTSTRAP_LONG_STRING_INT_SIG = sig(CallSite.class, Lookup.class, String.class, MethodType.class, long.class, String.class, int.class);
+    public final static String BOOTSTRAP_DOUBLE_STRING_INT_SIG = sig(CallSite.class, Lookup.class, String.class, MethodType.class, double.class, String.class, int.class);
     public final static String BOOTSTRAP_STRING_INT_SIG = sig(CallSite.class, Lookup.class, String.class, MethodType.class, String.class, int.class);
     public final static String BOOTSTRAP_STRING_LONG_SIG = sig(CallSite.class, Lookup.class, String.class, MethodType.class, String.class, long.class);
     public final static String BOOTSTRAP_STRING_DOUBLE_SIG = sig(CallSite.class, Lookup.class, String.class, MethodType.class, String.class, double.class);
@@ -99,7 +99,7 @@ public class InvokeDynamicSupport {
     }
     
     public static Handle getInvocationHandle() {
-        return getBootstrapHandle("invocationBootstrap", InvocationLinker.class, BOOTSTRAP_BARE_SIG);
+        return getBootstrapHandle("invocationBootstrap", InvocationLinker.class, BOOTSTRAP_STRING_INT_SIG);
     }
     
     public static Handle getConstantHandle() {
@@ -159,19 +159,19 @@ public class InvokeDynamicSupport {
     }
     
     public static Handle getFixnumOperatorHandle() {
-        return getBootstrapHandle("fixnumOperatorBootstrap", MathLinker.class, BOOTSTRAP_LONG_SIG);
+        return getBootstrapHandle("fixnumOperatorBootstrap", MathLinker.class, BOOTSTRAP_LONG_STRING_INT_SIG);
     }
     
     public static Handle getFixnumBooleanHandle() {
-        return getBootstrapHandle("fixnumBooleanBootstrap", MathLinker.class, BOOTSTRAP_LONG_SIG);
+        return getBootstrapHandle("fixnumBooleanBootstrap", MathLinker.class, BOOTSTRAP_LONG_STRING_INT_SIG);
     }
     
     public static Handle getFloatOperatorHandle() {
-        return getBootstrapHandle("floatOperatorBootstrap", MathLinker.class, BOOTSTRAP_DOUBLE_SIG);
+        return getBootstrapHandle("floatOperatorBootstrap", MathLinker.class, BOOTSTRAP_DOUBLE_STRING_INT_SIG);
     }
     
     public static Handle getVariableHandle() {
-        return getBootstrapHandle("variableBootstrap", BOOTSTRAP_BARE_SIG);
+        return getBootstrapHandle("variableBootstrap", BOOTSTRAP_STRING_INT_SIG);
     }
     
     ////////////////////////////////////////////////////////////////////////////
@@ -382,20 +382,12 @@ public class InvokeDynamicSupport {
         site.setTarget(init);
         return site;
     }
-    
-    public static class VariableSite extends MutableCallSite {
-        public final String name;
-        public VariableSite(MethodType type, String name) {
-            super(type);
-            this.name = name;
-        }
-    }
-    
-    public static CallSite variableBootstrap(Lookup lookup, String name, MethodType type) throws Throwable {
+
+    public static CallSite variableBootstrap(Lookup lookup, String name, MethodType type, String file, int line) throws Throwable {
         String[] names = name.split(":");
         String operation = names[0];
         String varName = names[1];
-        VariableSite site = new VariableSite(type, varName);
+        VariableSite site = new VariableSite(type, varName, file, line);
         MethodHandle handle;
         
         if (operation.equals("get")) {
@@ -413,7 +405,8 @@ public class InvokeDynamicSupport {
     }
     
     public static IRubyObject getVariableFallback(VariableSite site, IRubyObject self) throws Throwable {
-        RubyClass.VariableAccessor accessor = self.getMetaClass().getRealClass().getVariableAccessorForRead(site.name);
+        RubyClass realClass = self.getMetaClass().getRealClass();
+        RubyClass.VariableAccessor accessor = realClass.getVariableAccessorForRead(site.name);
         
         // produce nil if the variable has not been initialize
         MethodHandle nullToNil = findStatic(RuntimeHelpers.class, "nullToNil", methodType(IRubyObject.class, IRubyObject.class, IRubyObject.class));
@@ -426,49 +419,78 @@ public class InvokeDynamicSupport {
         getValue = filterReturnValue(getValue, nullToNil);
         
         // prepare fallback
-        MethodHandle fallback = findStatic(InvokeDynamicSupport.class, "getVariableFallback", methodType(IRubyObject.class, VariableSite.class, IRubyObject.class));
-        fallback = fallback.bindTo(site);
+        MethodHandle fallback = null;
+        if (site.chainCount() > RubyInstanceConfig.MAX_POLY_COUNT) {
+            if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(site.name + "\tqet on type " + self.getMetaClass().id + " failed (polymorphic)" + extractSourceInfo(site));
+            fallback = findStatic(InvokeDynamicSupport.class, "getVariableFail", methodType(IRubyObject.class, VariableSite.class, IRubyObject.class));
+            fallback = fallback.bindTo(site);
+            site.setTarget(fallback);
+            return (IRubyObject)fallback.invokeWithArguments(self);
+        } else {
+            if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(site.name + "\tget on type " + self.getMetaClass().id + " added to PIC" + extractSourceInfo(site));
+            fallback = site.getTarget();
+            site.incrementChainCount();
+        }
         
         // prepare test
-        MethodHandle test = findStatic(InvocationLinker.class, "testRealClass", methodType(boolean.class, RubyClass.class, IRubyObject.class));
-        test = test.bindTo(self.getMetaClass().getRealClass());
+        MethodHandle test = findStatic(InvocationLinker.class, "testRealClass", methodType(boolean.class, int.class, IRubyObject.class));
+        test = insertArguments(test, 0, accessor.getClassId());
         
         getValue = guardWithTest(test, getValue, fallback);
         
-        if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(site.name + "\tget on class " + self.getMetaClass().id + " bound directly");
+        if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(site.name + "\tget on class " + self.getMetaClass().id + " bound directly" + extractSourceInfo(site));
         site.setTarget(getValue);
         
         return (IRubyObject)getValue.invokeWithArguments(self);
     }
+
+    public static IRubyObject getVariableFail(VariableSite site, IRubyObject self) throws Throwable {
+        return site.getVariable(self);
+    }
     
     public static IRubyObject setVariableFallback(VariableSite site, IRubyObject self, IRubyObject value) throws Throwable {
-        RubyClass.VariableAccessor accessor = self.getMetaClass().getRealClass().getVariableAccessorForWrite(site.name);
-        
+        RubyClass realClass = self.getMetaClass().getRealClass();
+        RubyClass.VariableAccessor accessor = realClass.getVariableAccessorForWrite(site.name);
+
         // return provided value
         MethodHandle returnValue = identity(IRubyObject.class);
         returnValue = dropArguments(returnValue, 0, IRubyObject.class);
-        
+
         // set variable value and fold by returning value
         MethodHandle setValue = findVirtual(IRubyObject.class, "setVariable", methodType(void.class, int.class, Object.class));
         setValue = explicitCastArguments(setValue, methodType(void.class, IRubyObject.class, int.class, IRubyObject.class));
         setValue = insertArguments(setValue, 1, accessor.getIndex());
         setValue = foldArguments(returnValue, setValue);
-        
+
         // prepare fallback
-        MethodHandle fallback = findStatic(InvokeDynamicSupport.class, "setVariableFallback", methodType(IRubyObject.class, VariableSite.class, IRubyObject.class, IRubyObject.class));
-        fallback = fallback.bindTo(site);
-        
+        MethodHandle fallback = null;
+        if (site.chainCount() > RubyInstanceConfig.MAX_POLY_COUNT) {
+            if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(site.name + "\tset on type " + self.getMetaClass().id + " failed (polymorphic)" + extractSourceInfo(site));
+            fallback = findStatic(InvokeDynamicSupport.class, "setVariableFail", methodType(IRubyObject.class, VariableSite.class, IRubyObject.class, IRubyObject.class));
+            fallback = fallback.bindTo(site);
+            site.setTarget(fallback);
+            return (IRubyObject)fallback.invokeWithArguments(self, value);
+        } else {
+            if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(site.name + "\tset on type " + self.getMetaClass().id + " added to PIC" + extractSourceInfo(site));
+            fallback = site.getTarget();
+            site.incrementChainCount();
+        }
+
         // prepare test
-        MethodHandle test = findStatic(InvocationLinker.class, "testRealClass", methodType(boolean.class, RubyClass.class, IRubyObject.class));
-        test = test.bindTo(self.getMetaClass().getRealClass());
+        MethodHandle test = findStatic(InvocationLinker.class, "testRealClass", methodType(boolean.class, int.class, IRubyObject.class));
+        test = insertArguments(test, 0, accessor.getClassId());
         test = dropArguments(test, 1, IRubyObject.class);
-        
+
         setValue = guardWithTest(test, setValue, fallback);
-        
-        if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(site.name + "\tset on class " + self.getMetaClass().id + " bound directly");
+
+        if (RubyInstanceConfig.LOG_INDY_BINDINGS) LOG.info(site.name + "\tset on class " + self.getMetaClass().id + " bound directly" + extractSourceInfo(site));
         site.setTarget(setValue);
-        
+
         return (IRubyObject)setValue.invokeWithArguments(self, value);
+    }
+
+    public static IRubyObject setVariableFail(VariableSite site, IRubyObject self, IRubyObject value) throws Throwable {
+        return site.setVariable(self, value);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -477,6 +499,7 @@ public class InvokeDynamicSupport {
 
     public static IRubyObject constantFallback(RubyConstantCallSite site, 
             ThreadContext context) {
+        SwitchPoint switchPoint = (SwitchPoint)context.runtime.getConstantInvalidator().getData();
         IRubyObject value = context.getConstant(site.name());
         
         if (value != null) {
@@ -491,7 +514,6 @@ public class InvokeDynamicSupport {
                     0,
                     site);
 
-            SwitchPoint switchPoint = (SwitchPoint)context.runtime.getConstantInvalidator().getData();
             MethodHandle gwt = switchPoint.guardWithTest(valueHandle, fallback);
             site.setTarget(gwt);
         } else {
@@ -666,5 +688,9 @@ public class InvokeDynamicSupport {
         } catch (IllegalAccessException nae) {
             throw new RuntimeException(nae);
         }
+    }
+
+    private static String extractSourceInfo(VariableSite site) {
+        return " (" + site.file() + ":" + site.line() + ")";
     }
 }
